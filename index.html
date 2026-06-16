@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16 -->
+<!-- Meal Planner — version 2026-06-16b (shared cloud sync + password gate) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11,6 +11,8 @@
 <title>Meal Planner</title>
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%231f7a4d'/%3E%3Ctext x='90' y='128' font-size='100' text-anchor='middle'%3E%F0%9F%8D%B2%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   :root{
     --green:#1f7a4d; --green-dark:#155c39; --green-light:#e6f4ec;
@@ -52,7 +54,7 @@
   .row{display:flex; gap:8px}
   .row > *{flex:1}
 
-  input[type=text],input[type=url],textarea,select{
+  input[type=text],input[type=url],input[type=password],textarea,select{
     width:100%; padding:12px; border:1px solid var(--line); border-radius:10px;
     font-family:inherit; font-size:16px; background:#fff; color:var(--text);
   }
@@ -144,12 +146,37 @@
   .chip.on{background:var(--green); color:#fff; border-color:var(--green)}
   .cat-head{font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700; margin:16px 2px 9px}
   .cat-head:first-child{margin-top:4px}
+
+  /* Password gate */
+  #gate{position:fixed; inset:0; background:var(--green); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px}
+  #gate.hidden{display:none}
+  #gate .box{background:#fff; border-radius:18px; padding:28px 22px; max-width:340px; width:100%; text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.25)}
+  #gate .box h1{font-size:40px; margin:0}
+  #gate .box .t{font-weight:700; font-size:18px; margin:6px 0 2px}
+  #gate .box p{color:var(--muted); font-size:13.5px; margin:0 0 16px}
+  #gate input{text-align:center; font-size:18px}
+  #gate .err{color:var(--danger); font-size:13px; min-height:18px; margin-top:8px}
+  /* Cloud-sync indicator in header */
+  #syncDot{display:inline-block; width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,.35); margin-left:7px; vertical-align:middle; transition:background .3s}
+  #syncDot.on{background:#7CFC00; box-shadow:0 0 6px #7CFC00}
 </style>
 </head>
 <body>
+<!-- Password gate -->
+<div id="gate">
+  <div class="box">
+    <h1>🍲</h1>
+    <div class="t">Meal Planner</div>
+    <p>Enter the shared password to continue.</p>
+    <input type="password" id="gatePass" placeholder="Password" autocomplete="current-password" autocapitalize="off">
+    <button class="btn" style="margin-top:12px" onclick="tryGate()">Open</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+</div>
+
 <header>
   <h1>🍲 Meal Planner</h1>
-  <div class="sub" id="weekLabel">Plan your week, shop in one trip</div>
+  <div class="sub" id="weekLabel">Plan your week, shop in one trip<span id="syncDot" title="Cloud sync"></span></div>
 </header>
 
 <main>
@@ -295,6 +322,38 @@ const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sun
 const MEALS = ["Breakfast","Lunch","Dinner"];
 const STORE_KEY = "mealPlannerData_v1";
 
+/* ===== Shared cloud sync (Firebase Firestore) =====
+   Everyone who opens this app reads & writes ONE shared document, so the plan,
+   recipes and grocery list stay in sync across every device. localStorage is
+   kept as a local cache so the app still works offline. */
+const firebaseConfig = {
+  apiKey: "AIzaSyAQDz9BfD5wevxdKszQCxNCYCVa-TJiadw",
+  authDomain: "meal-planner-28d0c.firebaseapp.com",
+  projectId: "meal-planner-28d0c",
+  storageBucket: "meal-planner-28d0c.firebasestorage.app",
+  messagingSenderId: "452767746559",
+  appId: "1:452767746559:web:aba0f6480d35af3bf03fca",
+  measurementId: "G-VNWY7YKMM2"
+};
+let db=null, DOC=null, pushTimer=null;
+try{
+  if(window.firebase){
+    firebase.initializeApp(firebaseConfig);
+    db=firebase.firestore();
+    DOC=db.collection('mealPlanner').doc('shared');
+  }
+}catch(e){ console.warn('Firebase unavailable; running local-only.', e); }
+
+// Bring any saved blob up to the current shape (used for both local + cloud loads).
+function normalize(d){
+  d = d || {};
+  d.recipes = d.recipes||[];
+  d.plan = d.plan||{};
+  d.groceryChecked = d.groceryChecked||{};
+  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.category==null) r.category=''; });
+  for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
+  return d;
+}
 let data = load();
 
 function load(){
@@ -303,16 +362,51 @@ function load(){
     const raw = localStorage.getItem(STORE_KEY);
     if(raw) d = JSON.parse(raw);
   }catch(e){}
-  d.recipes = d.recipes||[];
-  d.plan = d.plan||{};
-  d.groceryChecked = d.groceryChecked||{};
-  // migrate: ensure servings + notes on every recipe
-  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.category==null) r.category=''; });
-  // migrate: plan slots used to be a bare recipe-id string; wrap them as objects
-  for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
-  return d;
+  return normalize(d);
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
+function saveLocal(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(data)); }catch(e){} }
+function save(){ saveLocal(); pushRemote(); }
+
+// Push the whole dataset to the shared cloud doc (debounced).
+function pushRemote(){
+  if(!DOC) return;
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(()=>{
+    DOC.set({payload:JSON.stringify(data), updatedAt:Date.now()})
+       .catch(e=>console.warn('Cloud save failed (will retry on next change):', e));
+  },400);
+}
+function rerenderCurrent(){
+  const active=document.querySelector('.view.active');
+  const v=active?active.id.replace('view-',''):'plan';
+  if(v==='plan')renderPlanner();
+  else if(v==='recipes')renderRecipes();
+  else if(v==='grocery')renderGrocery();
+}
+function setSync(on){ const d=document.getElementById('syncDot'); if(d) d.classList.toggle('on', !!on); }
+
+// Live subscription: apply any change made on another device, instantly.
+function startSync(){
+  if(!DOC) return;
+  DOC.onSnapshot(snap=>{
+    setSync(true);
+    if(snap.metadata.hasPendingWrites) return;   // ignore the echo of our own write
+    if(snap.exists){
+      const p=snap.data().payload;
+      if(typeof p==='string'){
+        try{ data=normalize(JSON.parse(p)); saveLocal(); rerenderCurrent(); }catch(e){}
+      }
+    }else{
+      // No shared doc yet → seed it from whatever this device already has.
+      if(!data.recipes.length) seedExample();
+      pushRemote();
+    }
+  }, err=>{ console.warn('Cloud sync error:', err); setSync(false); });
+}
+function seedExample(){
+  data.recipes.push({id:uid(),name:'Example: Weeknight Chili',category:'Dinner',servings:4,notes:'',rating:0,sourceUrl:'',ingredients:['1 lb ground beef','1 onion, diced','2 cloves garlic','1 can kidney beans','1 can diced tomatoes','2 tbsp chili powder','1 tsp cumin','Salt and pepper']});
+  saveLocal();
+}
 // Resolve a plan slot to its recipe + effective servings (null slot.servings = use recipe base)
 function slotInfo(key){
   const s=data.plan[key]; if(!s) return null;
@@ -952,12 +1046,30 @@ function shareGrocery(){
 /* ---------------- utils ---------------- */
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
+/* ---------------- Password gate ---------------- */
+const APP_PASSWORD = "mealplan2026"; // <-- shared password — change this to whatever your group should use
+function tryGate(){
+  const v=document.getElementById('gatePass').value;
+  if(v===APP_PASSWORD){
+    try{ localStorage.setItem('mp_auth','1'); }catch(e){}
+    document.getElementById('gate').classList.add('hidden');
+  }else{
+    document.getElementById('gateErr').textContent='Incorrect password';
+    document.getElementById('gatePass').select();
+  }
+}
+(function initGate(){
+  try{ if(localStorage.getItem('mp_auth')==='1') document.getElementById('gate').classList.add('hidden'); }catch(e){}
+  const inp=document.getElementById('gatePass');
+  if(inp) inp.addEventListener('keydown', e=>{ if(e.key==='Enter') tryGate(); });
+})();
+
 /* ---------------- init ---------------- */
 renderPlanner();
-// Seed a friendly example on first ever launch
-if(!localStorage.getItem(STORE_KEY) && !data.recipes.length){
-  data.recipes.push({id:uid(),name:'Example: Weeknight Chili',category:'Dinner',servings:4,notes:'',rating:0,sourceUrl:'',ingredients:['1 lb ground beef','1 onion, diced','2 cloves garlic','1 can kidney beans','1 can diced tomatoes','2 tbsp chili powder','1 tsp cumin','Salt and pepper']});
-  save();
+if(DOC){
+  startSync();                       // cloud sync drives seeding + live updates
+}else if(!localStorage.getItem(STORE_KEY) && !data.recipes.length){
+  seedExample(); renderPlanner();    // local-only fallback if cloud is unavailable
 }
 </script>
 </body>
