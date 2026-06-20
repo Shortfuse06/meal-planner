@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16b (shared cloud sync + password gate) -->
+<!-- Meal Planner — version 2026-06-16c (cloud sync + password gate + recipe detail view + imported instructions) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -146,6 +146,12 @@
   .chip.on{background:var(--green); color:#fff; border-color:var(--green)}
   .cat-head{font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700; margin:16px 2px 9px}
   .cat-head:first-child{margin-top:4px}
+
+  /* Recipe detail view */
+  #viewBody h3{margin-top:16px; margin-bottom:6px}
+  .ing-list{margin:6px 0 0; padding-left:20px}
+  .ing-list li{margin-bottom:5px; font-size:14.5px}
+  .instr{font-size:14.5px; line-height:1.6; margin-top:4px}
 
   /* Password gate */
   #gate{position:fixed; inset:0; background:var(--green); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px}
@@ -311,6 +317,14 @@
       <button class="btn" style="margin-top:14px" onclick="applyDays()">Add to plan</button>
       <button class="btn outline small" id="pickBackBtn" style="margin-top:8px" onclick="backToPick()">← Pick a different recipe</button>
     </div>
+  </div>
+</div>
+
+<!-- Recipe detail modal (opened by tapping a planned meal) -->
+<div class="modal-bg" id="viewModal">
+  <div class="modal">
+    <h2>Recipe <button class="x" onclick="closeModal('viewModal')">×</button></h2>
+    <div id="viewBody"></div>
   </div>
 </div>
 
@@ -527,11 +541,11 @@ async function importLink(){
     const html = await fetchPage(url);
     const parsed = parseRecipe(html);
     if(parsed.ingredients.length){
-      setStatus('Found '+parsed.ingredients.length+' ingredients. Review & save below.','ok');
+      setStatus('Found '+parsed.ingredients.length+' ingredients'+(parsed.instructions?' and the cooking steps':'')+'. Review & save below.','ok');
     }else{
       setStatus('Couldn\'t auto-detect ingredients on that page. Add them manually below.','info');
     }
-    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients);
+    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients, '', parsed.instructions||'');
   }catch(e){
     setStatus('That site blocked automatic import. You can type the recipe in below.','err');
     showEdit(titleFromUrl(url), []);
@@ -553,8 +567,31 @@ async function fetchPage(url){
   }
   throw lastErr||new Error('fetch failed');
 }
+// Turn a JSON-LD recipeInstructions value (string | array | HowToStep | HowToSection)
+// into a tidy numbered list of steps.
+function extractInstructions(node){
+  const ri=node.recipeInstructions; if(!ri) return '';
+  const steps=[];
+  (function walk(x){
+    if(!x) return;
+    if(typeof x==='string'){ const s=decode(stripTags(x)).replace(/\s+/g,' ').trim(); if(s) steps.push(s); return; }
+    if(Array.isArray(x)){ x.forEach(walk); return; }
+    if(typeof x==='object'){
+      const t=[].concat(x['@type']||[]);
+      if(t.some(tt=>/HowToSection/i.test(tt))){
+        if(x.name){ const s=decode(stripTags(x.name)).trim(); if(s) steps.push('— '+s+' —'); }
+        walk(x.itemListElement); return;
+      }
+      if(x.text){ const s=decode(stripTags(x.text)).replace(/\s+/g,' ').trim(); if(s) steps.push(s); return; }
+      if(x.itemListElement){ walk(x.itemListElement); return; }
+      if(x.name){ const s=decode(stripTags(x.name)).trim(); if(s) steps.push(s); }
+    }
+  })(ri);
+  let n=0;
+  return steps.map(s=> /^—.*—$/.test(s) ? '\n'+s : (++n)+'. '+s ).join('\n').trim();
+}
 function parseRecipe(html){
-  let title='', ingredients=[];
+  let title='', ingredients=[], instructions='';
   // 1) JSON-LD structured data (most recipe sites)
   const scripts=[...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   for(const m of scripts){
@@ -567,6 +604,8 @@ function parseRecipe(html){
           title=node.name||title;
           if(Array.isArray(node.recipeIngredient)) ingredients=node.recipeIngredient.slice();
           else if(Array.isArray(node.ingredients)) ingredients=node.ingredients.slice();
+          const instr=extractInstructions(node);
+          if(instr) instructions=instr;
         }
       }
     }catch(e){}
@@ -576,6 +615,12 @@ function parseRecipe(html){
     const im=[...html.matchAll(/itemprop=["']recipeIngredient["'][^>]*>([\s\S]*?)<\//gi)];
     ingredients=im.map(x=>stripTags(x[1]).trim()).filter(Boolean);
   }
+  // 2b) Fallback for instructions: itemprop="recipeInstructions"
+  if(!instructions){
+    const sm=[...html.matchAll(/itemprop=["']recipeInstructions["'][^>]*>([\s\S]*?)<\//gi)];
+    const list=sm.map(x=>decode(stripTags(x[1])).replace(/\s+/g,' ').trim()).filter(Boolean);
+    if(list.length) instructions=list.map((s,i)=>(i+1)+'. '+s).join('\n');
+  }
   if(!title){
     const tm=html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     if(tm)title=stripTags(tm[1]).split(/[|–—-]/)[0].trim();
@@ -583,7 +628,7 @@ function parseRecipe(html){
   ingredients=ingredients.map(s=>decode(stripTags(String(s))).replace(/\s+/g,' ').trim()).filter(Boolean);
   // de-dupe
   ingredients=[...new Set(ingredients)];
-  return {title:decode(title), ingredients};
+  return {title:decode(title), ingredients, instructions};
 }
 function stripTags(s){return String(s).replace(/<[^>]*>/g,' ');}
 function decode(s){const t=document.createElement('textarea');t.innerHTML=s;return t.value;}
@@ -607,11 +652,14 @@ async function importPhoto(ev){
     const likely=lines.filter(l=>/^[\d¼½¾⅓⅔•\-*]/.test(l) || /\b(cup|tsp|tbsp|tablespoon|teaspoon|oz|ounce|lb|pound|gram|g|ml|clove|can|pinch)\b/i.test(l));
     const use=likely.length>=2?likely:lines;
     if(use.length){
-      setStatus('Read '+use.length+' lines. Tidy them up below, then save.','ok');
+      setStatus('Read '+use.length+' lines. Tidy up the ingredients and steps below, then save.','ok');
     }else{
       setStatus('Couldn\'t read much text. Try a clearer, closer photo — or add ingredients manually.','err');
     }
-    showEdit('Recipe from photo', use);
+    // Lines that didn't look like ingredients are kept as the cooking instructions.
+    const usedSet=new Set(use);
+    const rest=lines.filter(l=>!usedSet.has(l)).join('\n');
+    showEdit('Recipe from photo', use, '', rest);
   }catch(e){
     setStatus('Photo reading failed. You can type the recipe in below.','err');
     showEdit('Recipe from photo', []);
@@ -761,7 +809,7 @@ function renderPlanner(){
       const servNote=(r && info.servings) ? `<span style="color:var(--muted);font-weight:400;font-size:12px"> · serves ${info.servings}</span>` : '';
       html+=`<div class="slot">
         <span class="meal-label">${meal}</span>
-        <span class="assigned ${r?'':'empty'}" onclick="pickRecipe('${key}')">${r?esc(r.name)+servNote:'tap to add'}</span>
+        <span class="assigned ${r?'':'empty'}" onclick="${r?`viewSlot('${key}')`:`pickRecipe('${key}')`}">${r?esc(r.name)+servNote:'tap to add'}</span>
         ${r?`<button class="clear" onclick="clearSlot('${key}')">remove</button>`:`<button onclick="pickRecipe('${key}')">+ add</button>`}
       </div>`;
     });
@@ -861,6 +909,47 @@ function clearSlot(key){ delete data.plan[key]; save(); renderPlanner(); }
 function clearWeek(){
   if(!confirm('Clear all meals from this week? Your recipes are kept.'))return;
   data.plan={}; save(); renderPlanner(); toast('Week cleared');
+}
+
+/* ---------------- Recipe detail view ---------------- */
+// Tapping a planned meal pulls the recipe up with its ingredients + instructions.
+function viewSlot(key){
+  const info=slotInfo(key);
+  if(!info){ pickRecipe(key); return; }   // empty slot → go straight to picking
+  openRecipeView(info.recipe.id, key);
+}
+function openRecipeView(rid, key){
+  const r=data.recipes.find(x=>x.id===rid); if(!r) return;
+  document.getElementById('viewBody').innerHTML=recipeDetailHtml(r, key||'');
+  document.getElementById('viewModal').classList.add('open');
+}
+function recipeDetailHtml(r, key){
+  const cat=catOf(r);
+  const stars=r.rating?`<div class="stars-sm" style="font-size:15px;margin-top:3px">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:'';
+  const src=r.sourceUrl?`<p class="hint" style="margin-top:8px">🔗 <a class="src-link" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener">${esc(shortUrl(r.sourceUrl))}</a></p>`:'';
+  const ings=(r.ingredients||[]).map(i=>`<li>${esc(i)}</li>`).join('');
+  const instr=(r.notes||'').trim();
+  const instrHtml=instr
+    ? `<div class="instr">${esc(instr).replace(/\n/g,'<br>')}</div>`
+    : `<p class="hint">No cooking instructions saved yet — tap “Edit recipe” to add them.</p>`;
+  let actions=`<button class="btn secondary" style="margin-top:18px" onclick="closeModal('viewModal');editRecipe('${r.id}')">✏️ Edit recipe</button>`;
+  if(key){
+    actions+=`<button class="btn outline small" style="margin-top:8px" onclick="closeModal('viewModal');pickRecipe('${key}')">🔄 Change recipe for this slot</button>`
+            +`<button class="btn danger small" style="margin-top:8px" onclick="closeModal('viewModal');clearSlot('${key}')">🗑 Remove from plan</button>`;
+  }
+  return `<div style="display:flex;align-items:center;gap:13px">
+      <div class="emoji" style="font-size:30px;width:52px;height:52px">${emojiFor(r.name)}</div>
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:18px">${esc(r.name)}</div>
+        <div class="hint" style="margin-top:2px">${cat?`🏷 ${esc(cat)} · `:''}serves ${r.servings||4}</div>
+        ${stars}
+      </div>
+    </div>${src}
+    <h3>Ingredients</h3>
+    <ul class="ing-list">${ings||'<li class="hint">No ingredients listed.</li>'}</ul>
+    <h3>Cooking instructions</h3>
+    ${instrHtml}
+    ${actions}`;
 }
 
 /* ---------------- Grocery list ---------------- */
