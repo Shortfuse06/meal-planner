@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16h (skip tap water) -->
+<!-- Meal Planner — version 2026-06-16i (batch multiplier 1x/2x/3x) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -158,6 +158,9 @@
   .ing-list{margin:6px 0 0; padding-left:20px}
   .ing-list li{margin-bottom:5px; font-size:14.5px}
   .instr{font-size:14.5px; line-height:1.6; margin-top:4px}
+  .batch-row{display:flex; align-items:center; gap:10px; margin-top:16px; font-weight:600; font-size:14.5px}
+  .batch-row .btn.outline.small{width:auto; min-width:44px; font-size:18px; line-height:1; padding:6px 0}
+  .batch-row b{min-width:34px; text-align:center}
   /* Category tags in the editor */
   .cat-chips{display:flex; flex-wrap:wrap; gap:6px}
   .cat-chips:not(:empty){margin-bottom:8px}
@@ -357,9 +360,9 @@
           <option>Breakfast</option><option selected>Lunch</option><option>Dinner</option>
         </select>
       </div>
-      <label>Servings for this meal</label>
-      <input type="text" id="pickServings" inputmode="numeric" style="max-width:120px">
-      <span id="pickServingsHint" class="hint" style="display:inline-block;margin-left:8px"></span>
+      <label>How many batches of this recipe?</label>
+      <div class="chips" id="pickTimes"></div>
+      <span id="pickTimesHint" class="hint"></span>
       <label>Add <span id="pickMealLabel"></span> on these days:</label>
       <div id="dayChecks"></div>
       <button class="btn" style="margin-top:14px" onclick="applyDays()">Add to plan</button>
@@ -476,7 +479,10 @@ function seedExample(){
 function slotInfo(key){
   const s=data.plan[key]; if(!s) return null;
   const r=data.recipes.find(x=>x.id===s.rid); if(!r) return null;
-  return {rid:s.rid, recipe:r, servings:(s.servings||r.servings||1)};
+  // "times" = how many batches of the recipe. Old slots stored absolute servings.
+  let times = s.times!=null ? s.times : (s.servings && r.servings ? Math.max(1,Math.round(s.servings/r.servings)) : 1);
+  times = Math.max(1, times|0);
+  return {rid:s.rid, recipe:r, times, servings:(r.servings||1)*times};
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function emojiFor(name){
@@ -942,7 +948,7 @@ function renderPlanner(){
       const info=slotInfo(key);
       const r=info&&info.recipe;
       if(r)assigned++;
-      const servNote=(r && info.servings) ? `<span style="color:var(--muted);font-weight:400;font-size:12px"> · serves ${info.servings}</span>` : '';
+      const servNote=(r && info.times>1) ? `<span style="color:var(--muted);font-weight:400;font-size:12px"> · ${info.times}×</span>` : '';
       html+=`<div class="slot">
         <span class="meal-label">${meal}</span>
         <span class="assigned ${r?'':'empty'}" onclick="${r?`viewSlot('${key}')`:`pickRecipe('${key}')`}">${r?esc(r.name)+servNote:'tap to add'}</span>
@@ -955,7 +961,15 @@ function renderPlanner(){
     ${assigned?'<br><button class="btn small" style="margin-top:10px;display:inline-block;width:auto" onclick="show(\'grocery\');buildGrocery()">🛒 Build grocery list</button> <button class="btn danger small" style="margin-top:10px;display:inline-block;width:auto" onclick="clearWeek()">🗑 Clear week</button>':''}</div>`;
   host.innerHTML=summary+html;
 }
-let pickKey=null, pickMeal=null, pickRid=null, pickDay=null, fromEditor=false;
+let pickKey=null, pickMeal=null, pickRid=null, pickDay=null, fromEditor=false, pickTimes=1;
+function setPickTimes(n){ pickTimes=Math.max(1,n|0); renderPickTimes(); }
+function renderPickTimes(r){
+  r=r||data.recipes.find(x=>x.id===pickRid);
+  const host=document.getElementById('pickTimes'); if(!host) return;
+  host.innerHTML=[1,2,3,4,5,6].map(n=>`<button type="button" class="chip ${n===pickTimes?'on':''}" onclick="setPickTimes(${n})">${n}×</button>`).join('');
+  const hint=document.getElementById('pickTimesHint');
+  if(hint && r) hint.textContent = `≈ ${(r.servings||1)*pickTimes} servings total`;
+}
 // Open the picker from a planner slot (meal is fixed by the slot)
 function pickRecipe(key){
   pickKey=key; fromEditor=false;
@@ -1012,8 +1026,7 @@ function showStep2(rid){
   const r=data.recipes.find(x=>x.id===rid);
   document.getElementById('pickDays').style.display='block';
   document.getElementById('pickChosen').innerHTML=`<span style="font-size:22px">${emojiFor(r.name)}</span>${esc(r.name)}`;
-  document.getElementById('pickServings').value=r.servings||4;
-  document.getElementById('pickServingsHint').textContent=`recipe serves ${r.servings||4}`;
+  pickTimes=1; renderPickTimes(r);
   renderDayChecks();
 }
 function onMealSelect(){ pickMeal=document.getElementById('pickMealSelect').value; renderDayChecks(); }
@@ -1033,9 +1046,7 @@ function applyDays(){
   const days=[...document.querySelectorAll('#dayChecks input:checked')].map(c=>c.value);
   if(!days.length){toast('Pick at least one day');return;}
   if(fromEditor) pickMeal=document.getElementById('pickMealSelect').value;
-  const r=data.recipes.find(x=>x.id===pickRid);
-  const serv=Math.max(1,parseInt(document.getElementById('pickServings').value)||(r?r.servings:4));
-  days.forEach(d=>{ data.plan[d+'|'+pickMeal]={rid:pickRid, servings:serv}; });
+  days.forEach(d=>{ data.plan[d+'|'+pickMeal]={rid:pickRid, times:Math.max(1,pickTimes|0)}; });
   save();
   closeModal('pickModal');
   show('plan');
@@ -1054,6 +1065,17 @@ function viewSlot(key){
   if(!info){ pickRecipe(key); return; }   // empty slot → go straight to picking
   openRecipeView(info.recipe.id, key);
 }
+// Change how many batches are planned for a slot, straight from the recipe view.
+function bumpSlot(key, delta){
+  const s=data.plan[key]; if(!s) return;
+  const info=slotInfo(key); if(!info) return;
+  const t=Math.max(1,(info.times|0)+delta);
+  s.times=t; delete s.servings;
+  save();
+  renderPlanner();
+  openRecipeView(s.rid, key);   // refresh the open modal
+  if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
+}
 function openRecipeView(rid, key){
   const r=data.recipes.find(x=>x.id===rid); if(!r) return;
   document.getElementById('viewBody').innerHTML=recipeDetailHtml(r, key||'');
@@ -1061,6 +1083,7 @@ function openRecipeView(rid, key){
 }
 function recipeDetailHtml(r, key){
   const cats=catsOf(r);
+  const slotTimes = key ? ((slotInfo(key)||{}).times||1) : 1;
   const stars=r.rating?`<div class="stars-sm" style="font-size:15px;margin-top:3px">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:'';
   const src=r.sourceUrl?`<p class="hint" style="margin-top:8px">🔗 <a class="src-link" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener">${esc(shortUrl(r.sourceUrl))}</a></p>`:'';
   const ings=(r.ingredients||[]).map(i=>`<li>${esc(i)}</li>`).join('');
@@ -1078,10 +1101,11 @@ function recipeDetailHtml(r, key){
       <div class="emoji" style="font-size:30px;width:52px;height:52px">${emojiFor(r.name)}</div>
       <div style="min-width:0">
         <div style="font-weight:700;font-size:18px">${esc(r.name)}</div>
-        <div class="hint" style="margin-top:2px">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}serves ${r.servings||4}</div>
+        <div class="hint" style="margin-top:2px">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}serves ${(r.servings||4)*slotTimes}${slotTimes>1?` (×${slotTimes})`:''}</div>
         ${stars}
       </div>
     </div>${src}
+    ${key?`<div class="batch-row">Batches needed: <button class="btn outline small" onclick="bumpSlot('${key}',-1)">−</button><b id="batchVal">${slotTimes}×</b><button class="btn outline small" onclick="bumpSlot('${key}',1)">＋</button></div>`:''}
     <h3>Ingredients</h3>
     <ul class="ing-list">${ings||'<li class="hint">No ingredients listed.</li>'}</ul>
     <h3>Cooking instructions</h3>
@@ -1202,7 +1226,7 @@ function buildGrocery(){
   DAYS.forEach(day=>MEALS.forEach(meal=>{
     const info=slotInfo(day+'|'+meal); if(!info)return;
     const r=info.recipe;
-    const factor=(info.servings||r.servings||1)/(r.servings||1)||1;
+    const factor=info.times||1;   // scale ingredients by how many batches are planned
     r.ingredients.forEach(ing=>{
       if(isTapWater(ing)) return;   // tap water isn't something you shop for
       const nk=normalizeKey(ing)||ing.toLowerCase();
