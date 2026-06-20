@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16e (multi-select category filter) -->
+<!-- Meal Planner — version 2026-06-16f (recipe photos) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -79,6 +79,12 @@
   /* Recipe list */
   .recipe-item{display:flex; align-items:center; gap:12px; padding:12px; border:1px solid var(--line); border-radius:12px; margin-bottom:10px; background:#fff}
   .recipe-item .emoji{font-size:24px; width:40px; height:40px; display:flex; align-items:center; justify-content:center; background:var(--green-light); border-radius:10px; flex-shrink:0}
+  .recipe-item .emoji.photo{background-size:cover; background-position:center}
+  .pick-thumb{width:34px; height:34px; border-radius:8px; background:var(--green-light) center/cover no-repeat; flex-shrink:0; display:inline-block}
+  #photoPreview{margin:0 0 8px}
+  #photoPreview:empty{display:none}
+  #photoPreview img{width:100%; max-height:220px; object-fit:cover; border-radius:12px; display:block}
+  #photoPreview .rm{margin-top:8px}
   .recipe-item .meta{flex:1; min-width:0}
   .recipe-item .meta .name{font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .recipe-item .meta .count{font-size:12.5px; color:var(--muted)}
@@ -265,9 +271,9 @@
     </div>
 
     <div id="mode-photo" style="display:none">
-      <label>Cookbook / recipe photo</label>
-      <input type="file" id="photoInput" accept="image/*" capture="environment" onchange="importPhoto(event)">
-      <p class="hint">Take a clear photo of the ingredients list. Text is read on your device — nothing is uploaded.</p>
+      <label>Cookbook / recipe photo(s)</label>
+      <input type="file" id="photoInput" accept="image/*" multiple onchange="importPhoto(event)">
+      <p class="hint">Add one or more photos — e.g. one of the ingredients and one of the steps. Each photo's text is read on your device and added on, so you can keep snapping until the whole recipe is captured. Nothing is uploaded.</p>
     </div>
 
     <div id="mode-manual" style="display:none">
@@ -281,6 +287,9 @@
       <label>Recipe name</label>
       <input type="text" id="recipeName" placeholder="e.g. Weeknight Chili">
       <div id="sourceRow" style="display:none;margin-top:7px"></div>
+      <label>Photo <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <div id="photoPreview"></div>
+      <input type="file" id="recipePhoto" accept="image/*" onchange="onRecipePhoto(event)">
       <label>Categories</label>
       <div id="categoryChips" class="cat-chips"></div>
       <input type="text" id="recipeCategory" list="catList" placeholder="Type a category, press Enter" autocapitalize="words"
@@ -381,7 +390,7 @@ function normalize(d){
   d.recipes = d.recipes||[];
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
-  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
+  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
 }
@@ -403,7 +412,9 @@ function pushRemote(){
   if(!DOC) return;
   clearTimeout(pushTimer);
   pushTimer=setTimeout(()=>{
-    DOC.set({payload:JSON.stringify(data), updatedAt:Date.now()})
+    const payload=JSON.stringify(data);
+    if(payload.length>1000000){ setSync(false); toast('⚠ Photos are too large to sync — remove some or use smaller pictures'); return; }
+    DOC.set({payload, updatedAt:Date.now()})
        .catch(e=>console.warn('Cloud save failed (will retry on next change):', e));
   },400);
 }
@@ -499,6 +510,39 @@ function commitCategoryInput(){
   inp.value='';
   renderCategoryChips();
 }
+
+/* ---- Recipe photo (compressed and stored with the recipe) ---- */
+let currentImage='';
+function onRecipePhoto(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  setStatus('<span class="spin"></span>Processing photo…','info');
+  compressImage(file,700,0.55).then(dataUrl=>{
+    currentImage=dataUrl; renderPhotoPreview(); setStatus('','');
+  }).catch(()=>{ setStatus('Couldn\'t read that image. Try another one.','err'); });
+  ev.target.value='';
+}
+function compressImage(file,maxDim,quality){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(); const url=URL.createObjectURL(file);
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      let w=img.width,h=img.height;
+      const scale=Math.min(1, maxDim/Math.max(w,h));
+      w=Math.max(1,Math.round(w*scale)); h=Math.max(1,Math.round(h*scale));
+      const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      try{ resolve(cv.toDataURL('image/jpeg', quality)); }catch(e){ reject(e); }
+    };
+    img.onerror=reject; img.src=url;
+  });
+}
+function renderPhotoPreview(){
+  const host=document.getElementById('photoPreview'); if(!host) return;
+  host.innerHTML = currentImage
+    ? `<img src="${currentImage}" alt="recipe photo"><button class="btn outline small rm" onclick="removePhoto()">Remove photo</button>`
+    : '';
+}
+function removePhoto(){ currentImage=''; renderPhotoPreview(); }
 function setRating(n){ currentRating=(n===currentRating)?0:n; renderStars(); }
 function renderStars(){
   const host=document.getElementById('recipeStars');
@@ -523,6 +567,7 @@ function resetImport(){
   editingId=null;
   currentRating=0; importSourceUrl='';
   currentCategories=[]; renderCategoryChips();
+  currentImage=''; renderPhotoPreview();
   renderStars();
   document.getElementById('sourceRow').style.display='none';
 }
@@ -557,6 +602,7 @@ function showEdit(name,ings,servings,notes,rating,category){
   currentCategories = Array.isArray(category) ? category.slice() : (category?String(category).split(',').map(s=>s.trim()).filter(Boolean):[]);
   document.getElementById('recipeCategory').value='';
   renderCategoryChips();
+  renderPhotoPreview();
   document.getElementById('recipeServings').value=servings||'';
   document.getElementById('recipeNotes').value=notes||'';
   currentRating=rating||0; renderStars();
@@ -681,29 +727,40 @@ function titleFromUrl(url){
 }
 
 /* ---- Photo import: OCR with Tesseract.js ---- */
+// Read one or more photos. Each photo's text is ADDED to the editor, so several
+// shots (ingredients page + steps page, etc.) build up one complete recipe.
 async function importPhoto(ev){
-  const file=ev.target.files[0]; if(!file)return;
-  setStatus('<span class="spin"></span>Reading text from photo… (this can take ~10–20s)','info');
-  try{
-    const { data:res } = await Tesseract.recognize(file,'eng');
-    const lines=res.text.split('\n').map(l=>l.trim())
-        .filter(l=>l.length>2 && /[a-zA-Z]/.test(l) && !/^[A-Z\s]{0,3}$/.test(l));
-    // Heuristic: ingredient lines often start with a quantity or bullet
-    const likely=lines.filter(l=>/^[\d¼½¾⅓⅔•\-*]/.test(l) || /\b(cup|tsp|tbsp|tablespoon|teaspoon|oz|ounce|lb|pound|gram|g|ml|clove|can|pinch)\b/i.test(l));
-    const use=likely.length>=2?likely:lines;
-    if(use.length){
-      setStatus('Read '+use.length+' lines. Tidy up the ingredients and steps below, then save.','ok');
-    }else{
-      setStatus('Couldn\'t read much text. Try a clearer, closer photo — or add ingredients manually.','err');
-    }
-    // Lines that didn't look like ingredients are kept as the cooking instructions.
-    const usedSet=new Set(use);
-    const rest=lines.filter(l=>!usedSet.has(l)).join('\n');
-    showEdit('Recipe from photo', use, '', rest);
-  }catch(e){
-    setStatus('Photo reading failed. You can type the recipe in below.','err');
-    showEdit('Recipe from photo', []);
+  const files=[...(ev.target.files||[])]; if(!files.length) return;
+  // Show the editor without wiping anything already captured from earlier photos.
+  document.getElementById('editArea').style.display='block';
+  const nameEl=document.getElementById('recipeName'); if(!nameEl.value.trim()) nameEl.value='Recipe from photo';
+  let addedIng=0;
+  for(let i=0;i<files.length;i++){
+    setStatus(`<span class="spin"></span>Reading photo ${i+1} of ${files.length}… (this can take ~10–20s each)`,'info');
+    try{
+      const { data:res } = await Tesseract.recognize(files[i],'eng');
+      const lines=res.text.split('\n').map(l=>l.trim())
+          .filter(l=>l.length>2 && /[a-zA-Z]/.test(l) && !/^[A-Z\s]{0,3}$/.test(l));
+      // Ingredient lines usually start with a quantity or bullet, or name a unit.
+      const likely=lines.filter(l=>/^[\d¼½¾⅓⅔•\-*]/.test(l) || /\b(cup|tsp|tbsp|tablespoon|teaspoon|oz|ounce|lb|pound|gram|g|ml|clove|can|pinch)\b/i.test(l));
+      if(likely.length>=2){
+        likely.forEach(l=>{ addIngredientLine(l); addedIng++; });
+        const used=new Set(likely);
+        appendNotes(lines.filter(l=>!used.has(l)).join('\n'));   // the rest = steps/notes
+      }else{
+        appendNotes(lines.join('\n'));   // looks like a steps/instructions page
+      }
+    }catch(e){ /* skip unreadable photo, keep going */ }
   }
+  ev.target.value='';   // allow re-selecting / adding more photos
+  setStatus(addedIng
+    ? `Added ${addedIng} ingredient line${addedIng!==1?'s':''}. Add another photo for more, or tidy up & save.`
+    : 'Text added below. Add another photo for more, or tidy up & save.','ok');
+}
+function appendNotes(text){
+  text=(text||'').trim(); if(!text) return;
+  const ta=document.getElementById('recipeNotes');
+  ta.value = ta.value.trim() ? (ta.value.trim()+'\n'+text) : text;
 }
 
 /* ---- Save ---- */
@@ -722,11 +779,11 @@ function saveRecipe(thenPlan){
   let savedId;
   if(editingId){
     const r=data.recipes.find(r=>r.id===editingId);
-    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;}
+    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;r.image=currentImage;}
     savedId=editingId;
   }else{
     savedId=uid();
-    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category});
+    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category,image:currentImage});
   }
   save();
   closeModal('importModal');
@@ -755,7 +812,7 @@ function toggleFilterCat(cat){
 function recipeItemHtml(r){
   const cats=catsOf(r);
   return `<div class="recipe-item">
-      <div class="emoji">${emojiFor(r.name)}</div>
+      ${r.image?`<div class="emoji photo" style="background-image:url('${r.image}')"></div>`:`<div class="emoji">${emojiFor(r.name)}</div>`}
       <div class="meta" onclick="editRecipe('${r.id}')">
         <div class="name">${esc(r.name)}</div>
         ${r.rating?`<div class="stars-sm">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:''}
@@ -805,6 +862,7 @@ function editRecipe(id){
   resetImport();
   editingId=id;
   importSourceUrl=r.sourceUrl||'';
+  currentImage=r.image||'';
   setImportMode('manual');
   showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, catsOf(r));
   document.getElementById('importModal').classList.add('open');
@@ -903,7 +961,7 @@ function renderPickList(){
     return;
   }
   list.innerHTML=recipes.map(r=>`<div class="pick-item" onclick="chooseRecipe('${r.id}')">
-    <span>${emojiFor(r.name)}</span>
+    ${r.image?`<span class="pick-thumb" style="background-image:url('${r.image}')"></span>`:`<span>${emojiFor(r.name)}</span>`}
     <span style="flex:1">${esc(r.name)}${r.rating?` <span class="stars-sm" style="display:inline">${'★'.repeat(r.rating)}</span>`:''}</span>
   </div>`).join('');
 }
@@ -986,12 +1044,13 @@ function recipeDetailHtml(r, key){
   const instrHtml=instr
     ? `<div class="instr">${esc(instr).replace(/\n/g,'<br>')}</div>`
     : `<p class="hint">No cooking instructions saved yet — tap “Edit recipe” to add them.</p>`;
+  const photo=r.image?`<img src="${r.image}" alt="${esc(r.name)}" style="width:100%;border-radius:12px;margin-bottom:14px;display:block">`:'';
   let actions=`<button class="btn secondary" style="margin-top:18px" onclick="closeModal('viewModal');editRecipe('${r.id}')">✏️ Edit recipe</button>`;
   if(key){
     actions+=`<button class="btn outline small" style="margin-top:8px" onclick="closeModal('viewModal');pickRecipe('${key}')">🔄 Change recipe for this slot</button>`
             +`<button class="btn danger small" style="margin-top:8px" onclick="closeModal('viewModal');clearSlot('${key}')">🗑 Remove from plan</button>`;
   }
-  return `<div style="display:flex;align-items:center;gap:13px">
+  return `${photo}<div style="display:flex;align-items:center;gap:13px">
       <div class="emoji" style="font-size:30px;width:52px;height:52px">${emojiFor(r.name)}</div>
       <div style="min-width:0">
         <div style="font-weight:700;font-size:18px">${esc(r.name)}</div>
