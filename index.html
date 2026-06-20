@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16c (cloud sync + password gate + recipe detail view + imported instructions) -->
+<!-- Meal Planner — version 2026-06-16d (multi-category + dropdown filter) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -152,6 +152,11 @@
   .ing-list{margin:6px 0 0; padding-left:20px}
   .ing-list li{margin-bottom:5px; font-size:14.5px}
   .instr{font-size:14.5px; line-height:1.6; margin-top:4px}
+  /* Category tags in the editor */
+  .cat-chips{display:flex; flex-wrap:wrap; gap:6px}
+  .cat-chips:not(:empty){margin-bottom:8px}
+  .cat-chip{display:inline-flex; align-items:center; gap:5px; background:var(--green-light); color:var(--green-dark); padding:6px 6px 6px 11px; border-radius:16px; font-size:13px; font-weight:600}
+  .cat-chip button{background:none; color:var(--green-dark); font-size:16px; line-height:1; padding:0 4px; width:auto}
 
   /* Password gate */
   #gate{position:fixed; inset:0; background:var(--green); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px}
@@ -267,14 +272,17 @@
       <label>Recipe name</label>
       <input type="text" id="recipeName" placeholder="e.g. Weeknight Chili">
       <div id="sourceRow" style="display:none;margin-top:7px"></div>
-      <label>Category</label>
-      <input type="text" id="recipeCategory" list="catList" placeholder="e.g. Dinner, Dessert, Vegetarian" autocapitalize="words">
+      <label>Categories</label>
+      <div id="categoryChips" class="cat-chips"></div>
+      <input type="text" id="recipeCategory" list="catList" placeholder="Type a category, press Enter" autocapitalize="words"
+             onkeydown="if(event.key==='Enter'||event.key===','){event.preventDefault();commitCategoryInput();}">
       <datalist id="catList">
         <option>Breakfast</option><option>Lunch</option><option>Dinner</option>
         <option>Dessert</option><option>Snack</option><option>Appetizer</option>
         <option>Side Dish</option><option>Salad</option><option>Soup</option>
         <option>Drink</option><option>Vegetarian</option><option>Vegan</option>
       </datalist>
+      <p class="hint" style="margin-top:4px">Add as many as you like — a recipe can show under several categories.</p>
       <label>Your rating</label>
       <div id="recipeStars" class="stars"></div>
       <label>Serves (base recipe)</label>
@@ -364,7 +372,7 @@ function normalize(d){
   d.recipes = d.recipes||[];
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
-  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.category==null) r.category=''; });
+  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
 }
@@ -463,7 +471,25 @@ function closeModal(id){ document.getElementById(id).classList.remove('open'); }
 /* ---------------- Import flow ---------------- */
 let importMode='link';
 let currentRating=0;       // stars selected in the editor
+let currentCategories=[];  // categories assigned in the editor (multi)
 let importSourceUrl='';    // URL a recipe was imported from (stored with the recipe)
+
+/* ---- Categories (multiple per recipe, shown as removable tags) ---- */
+function renderCategoryChips(){
+  const host=document.getElementById('categoryChips'); if(!host) return;
+  host.innerHTML=currentCategories.map((c,i)=>`<span class="cat-chip">${esc(c)}<button onclick="removeCategory(${i})" title="Remove">×</button></span>`).join('');
+}
+function addCategory(c){
+  c=(c||'').trim(); if(!c) return;
+  if(!currentCategories.some(x=>x.toLowerCase()===c.toLowerCase())) currentCategories.push(c);
+}
+function removeCategory(i){ currentCategories.splice(i,1); renderCategoryChips(); }
+function commitCategoryInput(){
+  const inp=document.getElementById('recipeCategory'); if(!inp) return;
+  inp.value.split(',').forEach(addCategory);
+  inp.value='';
+  renderCategoryChips();
+}
 function setRating(n){ currentRating=(n===currentRating)?0:n; renderStars(); }
 function renderStars(){
   const host=document.getElementById('recipeStars');
@@ -487,6 +513,7 @@ function resetImport(){
   setStatus('','');
   editingId=null;
   currentRating=0; importSourceUrl='';
+  currentCategories=[]; renderCategoryChips();
   renderStars();
   document.getElementById('sourceRow').style.display='none';
 }
@@ -518,7 +545,9 @@ function addIngredientLine(val){
 function showEdit(name,ings,servings,notes,rating,category){
   document.getElementById('editArea').style.display='block';
   document.getElementById('recipeName').value=name||'';
-  document.getElementById('recipeCategory').value=category||'';
+  currentCategories = Array.isArray(category) ? category.slice() : (category?String(category).split(',').map(s=>s.trim()).filter(Boolean):[]);
+  document.getElementById('recipeCategory').value='';
+  renderCategoryChips();
   document.getElementById('recipeServings').value=servings||'';
   document.getElementById('recipeNotes').value=notes||'';
   currentRating=rating||0; renderStars();
@@ -545,7 +574,7 @@ async function importLink(){
     }else{
       setStatus('Couldn\'t auto-detect ingredients on that page. Add them manually below.','info');
     }
-    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients, '', parsed.instructions||'');
+    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients, '', parsed.instructions||'', 0, parsed.categories||[]);
   }catch(e){
     setStatus('That site blocked automatic import. You can type the recipe in below.','err');
     showEdit(titleFromUrl(url), []);
@@ -591,7 +620,7 @@ function extractInstructions(node){
   return steps.map(s=> /^—.*—$/.test(s) ? '\n'+s : (++n)+'. '+s ).join('\n').trim();
 }
 function parseRecipe(html){
-  let title='', ingredients=[], instructions='';
+  let title='', ingredients=[], instructions='', categories=[];
   // 1) JSON-LD structured data (most recipe sites)
   const scripts=[...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   for(const m of scripts){
@@ -606,6 +635,8 @@ function parseRecipe(html){
           else if(Array.isArray(node.ingredients)) ingredients=node.ingredients.slice();
           const instr=extractInstructions(node);
           if(instr) instructions=instr;
+          const rc=[].concat(node.recipeCategory||[]).map(x=>decode(stripTags(String(x))).trim()).filter(Boolean);
+          if(rc.length) categories=[...new Set(rc)];
         }
       }
     }catch(e){}
@@ -628,7 +659,7 @@ function parseRecipe(html){
   ingredients=ingredients.map(s=>decode(stripTags(String(s))).replace(/\s+/g,' ').trim()).filter(Boolean);
   // de-dupe
   ingredients=[...new Set(ingredients)];
-  return {title:decode(title), ingredients, instructions};
+  return {title:decode(title), ingredients, instructions, categories};
 }
 function stripTags(s){return String(s).replace(/<[^>]*>/g,' ');}
 function decode(s){const t=document.createElement('textarea');t.innerHTML=s;return t.value;}
@@ -674,17 +705,19 @@ function saveRecipe(thenPlan){
     .map(i=>i.value.trim()).filter(Boolean);
   const servings=Math.max(1,parseInt(document.getElementById('recipeServings').value)||4);
   const notes=document.getElementById('recipeNotes').value.trim();
-  const category=document.getElementById('recipeCategory').value.trim();
+  commitCategoryInput();                       // fold any text still in the box into the tags
+  const categories=currentCategories.slice();
+  const category=categories.join(', ');         // kept in sync for backward compatibility
   if(!name){toast('Give the recipe a name');return;}
   if(!ings.length){toast('Add at least one ingredient');return;}
   let savedId;
   if(editingId){
     const r=data.recipes.find(r=>r.id===editingId);
-    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.category=category;}
+    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;}
     savedId=editingId;
   }else{
     savedId=uid();
-    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',category});
+    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category});
   }
   save();
   closeModal('importModal');
@@ -698,16 +731,20 @@ function saveRecipe(thenPlan){
 
 /* ---------------- Recipes view ---------------- */
 let recipeFilter='All';
-function catOf(r){ return (r.category||'').trim(); }
+function catsOf(r){
+  if(Array.isArray(r.categories)) return r.categories.filter(Boolean);
+  if(r.category) return String(r.category).split(',').map(s=>s.trim()).filter(Boolean);
+  return [];
+}
 function setRecipeFilter(c){ recipeFilter=c; renderRecipes(); }
 function recipeItemHtml(r){
-  const cat=catOf(r);
+  const cats=catsOf(r);
   return `<div class="recipe-item">
       <div class="emoji">${emojiFor(r.name)}</div>
       <div class="meta" onclick="editRecipe('${r.id}')">
         <div class="name">${esc(r.name)}</div>
         ${r.rating?`<div class="stars-sm">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:''}
-        <div class="count">${cat?`🏷 ${esc(cat)} · `:''}${r.ingredients.length} ingredient${r.ingredients.length!==1?'s':''} · serves ${r.servings||4}${r.notes?' · 📝':''}${r.sourceUrl?' · 🔗':''} · tap to edit</div>
+        <div class="count">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}${r.ingredients.length} ingredient${r.ingredients.length!==1?'s':''} · serves ${r.servings||4}${r.notes?' · 📝':''}${r.sourceUrl?' · 🔗':''} · tap to edit</div>
       </div>
       <button class="btn danger small" onclick="deleteRecipe('${r.id}')">Delete</button>
     </div>`;
@@ -718,33 +755,29 @@ function renderRecipes(){
     host.innerHTML='<div class="empty-state"><div class="big">📖</div>No recipes yet.<br>Tap “Add a recipe” to start your library.</div>';
     return;
   }
-  const cats=[...new Set(data.recipes.map(catOf).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  const hasUncat=data.recipes.some(r=>!catOf(r));
-  // Filter chips (only worth showing once at least one recipe is categorized)
-  let chipsHtml='';
+  // Every distinct category across all recipes (recipes can have several).
+  const cats=[...new Set(data.recipes.flatMap(catsOf))].filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  const hasUncat=data.recipes.some(r=>!catsOf(r).length);
+  // Category dropdown filter (only shown once something is categorized)
+  let filterHtml='';
   if(cats.length){
-    const chipNames=['All',...cats,...(hasUncat?['Uncategorized']:[])];
-    if(!chipNames.includes(recipeFilter)) recipeFilter='All';
-    chipsHtml='<div class="chips">'+chipNames.map(c=>`<button class="chip ${recipeFilter===c?'on':''}" onclick="setRecipeFilter('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</button>`).join('')+'</div>';
+    const opts=['All',...cats,...(hasUncat?['Uncategorized']:[])];
+    if(!opts.includes(recipeFilter)) recipeFilter='All';
+    filterHtml=`<div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap">🏷 Filter</span>
+      <select onchange="setRecipeFilter(this.value)" style="flex:1">
+        ${opts.map(o=>`<option value="${esc(o)}" ${o===recipeFilter?'selected':''}>${o==='All'?'All categories':esc(o)}</option>`).join('')}
+      </select></div>`;
   }else{ recipeFilter='All'; }
-  // Build groups
-  const groups=[];
-  if(recipeFilter==='All'){
-    cats.forEach(c=>groups.push([c, data.recipes.filter(r=>catOf(r)===c)]));
-    if(hasUncat) groups.push(['Uncategorized', data.recipes.filter(r=>!catOf(r))]);
-  }else if(recipeFilter==='Uncategorized'){
-    groups.push(['Uncategorized', data.recipes.filter(r=>!catOf(r))]);
-  }else{
-    groups.push([recipeFilter, data.recipes.filter(r=>catOf(r)===recipeFilter)]);
-  }
-  const showHeads = recipeFilter==='All' && groups.filter(g=>g[1].length).length>1;
-  let body='';
-  groups.forEach(([c,list])=>{
-    if(!list.length)return;
-    if(showHeads) body+=`<div class="cat-head">${esc(c)}</div>`;
-    body+=list.map(recipeItemHtml).join('');
-  });
-  host.innerHTML=chipsHtml+body;
+  // Recipes to show for the chosen filter (a recipe appears under each of its categories)
+  let list;
+  if(recipeFilter==='All') list=data.recipes;
+  else if(recipeFilter==='Uncategorized') list=data.recipes.filter(r=>!catsOf(r).length);
+  else list=data.recipes.filter(r=>catsOf(r).includes(recipeFilter));
+  const body = list.length
+    ? list.map(recipeItemHtml).join('')
+    : `<div class="empty-state">No recipes in “${esc(recipeFilter)}”.</div>`;
+  host.innerHTML=filterHtml+body;
 }
 function editRecipe(id){
   const r=data.recipes.find(r=>r.id===id); if(!r)return;
@@ -752,7 +785,7 @@ function editRecipe(id){
   editingId=id;
   importSourceUrl=r.sourceUrl||'';
   setImportMode('manual');
-  showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, r.category);
+  showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, catsOf(r));
   document.getElementById('importModal').classList.add('open');
 }
 function deleteRecipe(id){
@@ -843,7 +876,7 @@ function renderPickList(){
     return;
   }
   let recipes=data.recipes;
-  if(q) recipes=recipes.filter(r=> r.name.toLowerCase().includes(q) || (r.category||'').toLowerCase().includes(q) || (r.ingredients||[]).some(i=>i.toLowerCase().includes(q)) );
+  if(q) recipes=recipes.filter(r=> r.name.toLowerCase().includes(q) || catsOf(r).join(' ').toLowerCase().includes(q) || (r.ingredients||[]).some(i=>i.toLowerCase().includes(q)) );
   if(!recipes.length){
     list.innerHTML=`<div class="empty-state"><div class="big">🔍</div>No recipes match “${esc(q)}”.</div>`;
     return;
@@ -924,7 +957,7 @@ function openRecipeView(rid, key){
   document.getElementById('viewModal').classList.add('open');
 }
 function recipeDetailHtml(r, key){
-  const cat=catOf(r);
+  const cats=catsOf(r);
   const stars=r.rating?`<div class="stars-sm" style="font-size:15px;margin-top:3px">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:'';
   const src=r.sourceUrl?`<p class="hint" style="margin-top:8px">🔗 <a class="src-link" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener">${esc(shortUrl(r.sourceUrl))}</a></p>`:'';
   const ings=(r.ingredients||[]).map(i=>`<li>${esc(i)}</li>`).join('');
@@ -941,7 +974,7 @@ function recipeDetailHtml(r, key){
       <div class="emoji" style="font-size:30px;width:52px;height:52px">${emojiFor(r.name)}</div>
       <div style="min-width:0">
         <div style="font-weight:700;font-size:18px">${esc(r.name)}</div>
-        <div class="hint" style="margin-top:2px">${cat?`🏷 ${esc(cat)} · `:''}serves ${r.servings||4}</div>
+        <div class="hint" style="margin-top:2px">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}serves ${r.servings||4}</div>
         ${stars}
       </div>
     </div>${src}
