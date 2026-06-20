@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16g (pantry / at-home tracker) -->
+<!-- Meal Planner — version 2026-06-16h (skip tap water) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1109,6 +1109,14 @@ function categorize(text){
   for(const c of CATEGORIES) if(c.re.test(text)) return c.name;
   return 'Other';
 }
+// Plain tap water (incl. cold/warm/hot/ice/boiling water) doesn't belong on a
+// shopping list. Bottled waters you'd actually buy are kept.
+function isTapWater(ing){
+  const s=(ing||'').toLowerCase();
+  if(!/\bwater\b/.test(s)) return false;
+  if(/\b(distilled|sparkling|coconut|rose|tonic|soda|seltzer|mineral|club|spring|filtered)\b/.test(s)) return false;
+  return true;
+}
 function normalizeKey(s){
   return s.toLowerCase()
     .replace(/^[\d¼½¾⅓⅔.,/\s-]+/,'')          // strip leading quantity
@@ -1196,6 +1204,7 @@ function buildGrocery(){
     const r=info.recipe;
     const factor=(info.servings||r.servings||1)/(r.servings||1)||1;
     r.ingredients.forEach(ing=>{
+      if(isTapWater(ing)) return;   // tap water isn't something you shop for
       const nk=normalizeKey(ing)||ing.toLowerCase();
       const p=parseIng(ing);
       if(!groups[nk]) groups[nk]={cat:categorize(ing), froms:new Set(), name:p.name||ing, buckets:{}};
