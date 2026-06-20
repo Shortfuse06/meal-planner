@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16f (recipe photos) -->
+<!-- Meal Planner — version 2026-06-16g (pantry / at-home tracker) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -243,6 +243,27 @@
     </div>
     <div id="findHost"></div>
   </section>
+
+  <!-- PANTRY VIEW -->
+  <section class="view" id="view-pantry">
+    <div class="card">
+      <h2>🏠 At Home</h2>
+      <p class="hint">List ingredients you usually keep stocked. When you build your grocery list, anything on this list is skipped — so you only shop for what's missing.</p>
+      <div class="row" style="margin-top:12px">
+        <input type="text" id="pantryInput" placeholder="e.g. olive oil" autocapitalize="off" list="pantryList" onkeydown="if(event.key==='Enter'){event.preventDefault();addPantryItem();}" style="flex:3">
+        <button class="btn small" style="flex:1" onclick="addPantryItem()">Add</button>
+      </div>
+      <datalist id="pantryList">
+        <option>Salt</option><option>Pepper</option><option>Olive oil</option><option>Vegetable oil</option>
+        <option>Flour</option><option>Sugar</option><option>Brown sugar</option><option>Butter</option>
+        <option>Eggs</option><option>Milk</option><option>Garlic</option><option>Onion</option>
+        <option>Rice</option><option>Pasta</option><option>Soy sauce</option><option>Vinegar</option>
+        <option>Ketchup</option><option>Mustard</option><option>Mayonnaise</option><option>Honey</option>
+        <option>Baking powder</option><option>Baking soda</option><option>Vanilla extract</option>
+      </datalist>
+    </div>
+    <div id="pantryHost"></div>
+  </section>
 </main>
 
 <!-- Bottom nav -->
@@ -251,6 +272,7 @@
   <button id="tab-recipes" onclick="show('recipes')"><span class="ico">📖</span>Recipes</button>
   <button id="tab-find" onclick="show('find')"><span class="ico">🔎</span>Find</button>
   <button id="tab-grocery" onclick="show('grocery')"><span class="ico">🛒</span>Grocery</button>
+  <button id="tab-pantry" onclick="show('pantry')"><span class="ico">🏠</span>Pantry</button>
 </nav>
 
 <!-- Import modal -->
@@ -390,6 +412,7 @@ function normalize(d){
   d.recipes = d.recipes||[];
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
+  d.pantry = Array.isArray(d.pantry)?d.pantry:[];
   d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
@@ -480,6 +503,7 @@ function show(v){
   if(v==='plan')renderPlanner();
   if(v==='recipes')renderRecipes();
   if(v==='grocery')renderGrocery();
+  if(v==='pantry')renderPantry();
   window.scrollTo(0,0);
 }
 function toast(msg){
@@ -1182,23 +1206,32 @@ function buildGrocery(){
       else g.buckets[b].hasNull=true;
     });
   }));
-  data._grocery=Object.entries(groups).map(([k,g])=>{
+  const built=Object.entries(groups).map(([k,g])=>{
     const parts=[];
     for(const [b,info] of Object.entries(g.buckets)){
       if(info.hasQty) parts.push(fmtBucket(info.type, b, info.sum));
     }
     const qtyStr=parts.join(' + ');
-    const display=(qtyStr?qtyStr+' ':'')+capFirst(g.name);
-    return {key:k, display, froms:[...g.froms], cat:g.cat};
+    const name=capFirst(g.name);
+    const display=(qtyStr?qtyStr+' ':'')+name;
+    return {key:k, display, name, froms:[...g.froms], cat:g.cat};
   });
+  // Skip anything already stocked at home (the pantry).
+  const pantrySet=new Set((data.pantry||[]).map(p=>normalizeKey(p)||p.toLowerCase()));
+  data._grocery=built.filter(it=>!pantrySet.has(it.key));
+  data._grocerySkipped=built.filter(it=>pantrySet.has(it.key)).map(it=>it.name);
   save();
   renderGrocery();
 }
 function renderGrocery(){
   const host=document.getElementById('groceryHost');
   const items=data._grocery||[];
+  const skipped=data._grocerySkipped||[];
+  const skipHtml = skipped.length ? `<div class="card" style="font-size:13px;color:var(--muted)"><b>✓ Already at home (${skipped.length}):</b> ${esc(skipped.join(', '))}</div>` : '';
   if(!items.length){
-    host.innerHTML='<div class="empty-state"><div class="big">🛒</div>No items yet.<br>Plan some meals, then tap “Rebuild from plan”.</div>';
+    host.innerHTML=(skipped.length
+      ? '<div class="empty-state"><div class="big">🎉</div>You already have everything for this week!</div>'
+      : '<div class="empty-state"><div class="big">🛒</div>No items yet.<br>Plan some meals, then tap “Rebuild from plan”.</div>')+skipHtml;
     return;
   }
   const order=CAT_ORDER;
@@ -1220,7 +1253,7 @@ function renderGrocery(){
     html+='</div>';
   });
   const bar=`<div class="card" style="text-align:center"><strong>${done}/${total}</strong> items checked off</div>`;
-  host.innerHTML=bar+html;
+  host.innerHTML=bar+html+skipHtml;
 }
 function toggleG(key,el){
   if(el.checked)data.groceryChecked[key]=1; else delete data.groceryChecked[key];
@@ -1243,6 +1276,47 @@ function shareGrocery(){
   }else{
     prompt('Copy your list:',text);
   }
+}
+
+/* ---------------- Pantry (ingredients already at home) ---------------- */
+function renderPantry(){
+  const host=document.getElementById('pantryHost');
+  const items=data.pantry||[];
+  if(!items.length){
+    host.innerHTML='<div class="empty-state"><div class="big">🏠</div>Nothing here yet.<br>Add staples you always have on hand, like oil, salt, or rice.</div>';
+    return;
+  }
+  // Group by the same grocery categories for tidiness; keep each item's real index.
+  const groups={};
+  items.forEach((name,idx)=>{ const c=categorize(name); (groups[c]=groups[c]||[]).push({name,idx}); });
+  let html='';
+  CAT_ORDER.forEach(cat=>{
+    const inCat=groups[cat]; if(!inCat||!inCat.length) return;
+    html+=`<div class="card grocery-cat"><h3>${cat}</h3>`;
+    inCat.forEach(it=>{
+      html+=`<div class="gitem"><div class="txt">${esc(it.name)}</div><button class="btn danger small" onclick="removePantryItem(${it.idx})">Remove</button></div>`;
+    });
+    html+='</div>';
+  });
+  const bar=`<div class="card" style="text-align:center"><strong>${items.length}</strong> item${items.length!==1?'s':''} stocked at home</div>`;
+  host.innerHTML=bar+html;
+}
+function addPantryItem(){
+  const inp=document.getElementById('pantryInput');
+  const v=(inp.value||'').trim(); if(!v) return;
+  data.pantry=data.pantry||[];
+  v.split(',').map(s=>s.trim()).filter(Boolean).forEach(name=>{
+    if(!data.pantry.some(x=>x.toLowerCase()===name.toLowerCase())) data.pantry.push(name);
+  });
+  inp.value='';
+  save(); renderPantry();
+  if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery(); // keep grocery list in sync
+}
+function removePantryItem(idx){
+  if(!data.pantry) return;
+  data.pantry.splice(idx,1);
+  save(); renderPantry();
+  if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
 }
 
 /* ---------------- utils ---------------- */
