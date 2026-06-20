@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16i (batch multiplier 1x/2x/3x) -->
+<!-- Meal Planner — version 2026-06-16j (batch multiplier scales recipe view too) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1081,12 +1081,19 @@ function openRecipeView(rid, key){
   document.getElementById('viewBody').innerHTML=recipeDetailHtml(r, key||'');
   document.getElementById('viewModal').classList.add('open');
 }
+// Multiply the leading quantity of an ingredient line, for batch scaling in the recipe view.
+function scaleIngredient(line, factor){
+  if(!factor || factor===1) return line;
+  const {qty, rest}=parseQty(line);
+  if(qty==null) return line;            // no leading number → show as written
+  return fmtNum(qty*factor)+' '+rest;
+}
 function recipeDetailHtml(r, key){
   const cats=catsOf(r);
   const slotTimes = key ? ((slotInfo(key)||{}).times||1) : 1;
   const stars=r.rating?`<div class="stars-sm" style="font-size:15px;margin-top:3px">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:'';
   const src=r.sourceUrl?`<p class="hint" style="margin-top:8px">🔗 <a class="src-link" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener">${esc(shortUrl(r.sourceUrl))}</a></p>`:'';
-  const ings=(r.ingredients||[]).map(i=>`<li>${esc(i)}</li>`).join('');
+  const ings=(r.ingredients||[]).map(i=>`<li>${esc(scaleIngredient(i, slotTimes))}</li>`).join('');
   const instr=(r.notes||'').trim();
   const instrHtml=instr
     ? `<div class="instr">${esc(instr).replace(/\n/g,'<br>')}</div>`
@@ -1107,6 +1114,7 @@ function recipeDetailHtml(r, key){
     </div>${src}
     ${key?`<div class="batch-row">Batches needed: <button class="btn outline small" onclick="bumpSlot('${key}',-1)">−</button><b id="batchVal">${slotTimes}×</b><button class="btn outline small" onclick="bumpSlot('${key}',1)">＋</button></div>`:''}
     <h3>Ingredients</h3>
+    ${slotTimes>1?`<p class="hint" style="margin-top:0">Amounts scaled for ${slotTimes}× batches.</p>`:''}
     <ul class="ing-list">${ings||'<li class="hint">No ingredients listed.</li>'}</ul>
     <h3>Cooking instructions</h3>
     ${instrHtml}
