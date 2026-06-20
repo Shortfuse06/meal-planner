@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16d (multi-category + dropdown filter) -->
+<!-- Meal Planner — version 2026-06-16e (multi-select category filter) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -157,6 +157,15 @@
   .cat-chips:not(:empty){margin-bottom:8px}
   .cat-chip{display:inline-flex; align-items:center; gap:5px; background:var(--green-light); color:var(--green-dark); padding:6px 6px 6px 11px; border-radius:16px; font-size:13px; font-weight:600}
   .cat-chip button{background:none; color:var(--green-dark); font-size:16px; line-height:1; padding:0 4px; width:auto}
+  /* Multi-select category filter */
+  .filter-card{padding:0; overflow:hidden; margin-bottom:14px}
+  .filter-head{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; cursor:pointer}
+  .filter-summary{color:var(--muted); font-size:14px; font-weight:600; display:flex; align-items:center; gap:6px; min-width:0}
+  .filter-summary .txt{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:58vw}
+  .filter-menu{border-top:1px solid var(--line); padding:6px}
+  .filter-opt{display:flex; align-items:center; gap:11px; padding:10px; margin:0; font-weight:500; border-radius:8px}
+  .filter-opt:active{background:var(--green-light)}
+  .filter-opt input{width:20px; height:20px; accent-color:var(--green); flex-shrink:0}
 
   /* Password gate */
   #gate{position:fixed; inset:0; background:var(--green); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px}
@@ -730,13 +739,19 @@ function saveRecipe(thenPlan){
 }
 
 /* ---------------- Recipes view ---------------- */
-let recipeFilter='All';
+let recipeFilters=[];       // selected category filters (empty = show all)
+let filterMenuOpen=false;   // whether the filter dropdown is expanded
 function catsOf(r){
   if(Array.isArray(r.categories)) return r.categories.filter(Boolean);
   if(r.category) return String(r.category).split(',').map(s=>s.trim()).filter(Boolean);
   return [];
 }
-function setRecipeFilter(c){ recipeFilter=c; renderRecipes(); }
+function toggleFilterMenu(){ filterMenuOpen=!filterMenuOpen; const m=document.getElementById('filterMenu'); if(m) m.style.display=filterMenuOpen?'block':'none'; }
+function toggleFilterCat(cat){
+  if(cat===''){ recipeFilters=[]; }                        // "All categories" clears the selection
+  else{ const i=recipeFilters.indexOf(cat); if(i>=0) recipeFilters.splice(i,1); else recipeFilters.push(cat); }
+  renderRecipes();
+}
 function recipeItemHtml(r){
   const cats=catsOf(r);
   return `<div class="recipe-item">
@@ -758,25 +773,31 @@ function renderRecipes(){
   // Every distinct category across all recipes (recipes can have several).
   const cats=[...new Set(data.recipes.flatMap(catsOf))].filter(Boolean).sort((a,b)=>a.localeCompare(b));
   const hasUncat=data.recipes.some(r=>!catsOf(r).length);
-  // Category dropdown filter (only shown once something is categorized)
+  // Multi-select category filter (checkbox dropdown; pick several)
   let filterHtml='';
   if(cats.length){
-    const opts=['All',...cats,...(hasUncat?['Uncategorized']:[])];
-    if(!opts.includes(recipeFilter)) recipeFilter='All';
-    filterHtml=`<div class="card" style="padding:10px 14px;display:flex;align-items:center;gap:10px;margin-bottom:14px">
-      <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap">🏷 Filter</span>
-      <select onchange="setRecipeFilter(this.value)" style="flex:1">
-        ${opts.map(o=>`<option value="${esc(o)}" ${o===recipeFilter?'selected':''}>${o==='All'?'All categories':esc(o)}</option>`).join('')}
-      </select></div>`;
-  }else{ recipeFilter='All'; }
-  // Recipes to show for the chosen filter (a recipe appears under each of its categories)
-  let list;
-  if(recipeFilter==='All') list=data.recipes;
-  else if(recipeFilter==='Uncategorized') list=data.recipes.filter(r=>!catsOf(r).length);
-  else list=data.recipes.filter(r=>catsOf(r).includes(recipeFilter));
+    recipeFilters=recipeFilters.filter(f=> f==='Uncategorized'?hasUncat:cats.includes(f)); // drop stale picks
+    const summary = recipeFilters.length ? recipeFilters.join(', ') : 'All categories';
+    const opt=(val,label,checked)=>`<label class="filter-opt"><input type="checkbox" ${checked?'checked':''} onchange="toggleFilterCat('${esc(val).replace(/'/g,"\\'")}')"><span>${esc(label)}</span></label>`;
+    let menu=opt('','All categories',recipeFilters.length===0);
+    cats.forEach(c=> menu+=opt(c,c,recipeFilters.includes(c)));
+    if(hasUncat) menu+=opt('Uncategorized','Uncategorized',recipeFilters.includes('Uncategorized'));
+    filterHtml=`<div class="card filter-card">
+      <div class="filter-head" onclick="toggleFilterMenu()">
+        <span style="font-weight:700;color:var(--muted);font-size:13px;white-space:nowrap">🏷 Filter</span>
+        <span class="filter-summary"><span class="txt">${esc(summary)}</span><span>▾</span></span>
+      </div>
+      <div class="filter-menu" id="filterMenu" style="display:${filterMenuOpen?'block':'none'}">${menu}</div>
+    </div>`;
+  }else{ recipeFilters=[]; }
+  // Recipes to show: match ANY selected category (empty selection = show all)
+  const list = !recipeFilters.length ? data.recipes : data.recipes.filter(r=>{
+    const cs=catsOf(r);
+    return recipeFilters.some(f=> f==='Uncategorized' ? cs.length===0 : cs.includes(f));
+  });
   const body = list.length
     ? list.map(recipeItemHtml).join('')
-    : `<div class="empty-state">No recipes in “${esc(recipeFilter)}”.</div>`;
+    : `<div class="empty-state">No recipes match the selected categories.</div>`;
   host.innerHTML=filterHtml+body;
 }
 function editRecipe(id){
