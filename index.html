@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16k (backup & restore + weekly auto-backup) -->
+<!-- Meal Planner — version 2026-06-16l (photos stored in their own cloud docs) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -476,7 +476,7 @@ function startSync(){
     if(snap.exists){
       const p=snap.data().payload;
       if(typeof p==='string'){
-        try{ data=normalize(JSON.parse(p)); saveLocal(); rerenderCurrent(); }catch(e){}
+        try{ data=normalize(JSON.parse(p)); saveLocal(); rerenderCurrent(); ensureImages(); migrateImages(); }catch(e){}
       }
     }else{
       // No shared doc yet → seed it from whatever this device already has.
@@ -488,6 +488,66 @@ function startSync(){
 function seedExample(){
   data.recipes.push({id:uid(),name:'Example: Weeknight Chili',category:'Dinner',servings:4,notes:'',rating:0,sourceUrl:'',ingredients:['1 lb ground beef','1 onion, diced','2 cloves garlic','1 can kidney beans','1 can diced tomatoes','2 tbsp chili powder','1 tsp cumin','Salt and pepper']});
   saveLocal();
+}
+
+/* ---- Recipe images: each photo lives in its own Firestore doc so the main
+   shared document stays small (fast sync + effectively no photo limit). The
+   recipe just stores image:'cloud'. Images are cached in localStorage. ---- */
+let imageCache = {};
+const IMG_PREFIX = 'mealPlannerImg_';
+let _imgFetching = {};
+// The displayable image for a recipe (cached, legacy-inline, or empty).
+function imgData(r){
+  if(!r) return '';
+  if(imageCache[r.id]) return imageCache[r.id];
+  if(typeof r.image==='string' && r.image.indexOf('data:')===0) return r.image; // legacy inline
+  try{ const v=localStorage.getItem(IMG_PREFIX+r.id); if(v){ imageCache[r.id]=v; return v; } }catch(e){}
+  return '';
+}
+// Fetch any cloud-stored images we don't have yet, then refresh the view.
+function ensureImages(){
+  if(!db) return;
+  (data.recipes||[]).forEach(r=>{
+    if(r.image==='cloud' && !imgData(r) && !_imgFetching[r.id]){
+      _imgFetching[r.id]=true;
+      db.collection('mealPlannerImages').doc(r.id).get().then(snap=>{
+        _imgFetching[r.id]=false;
+        const d=snap.exists ? (snap.data().data||'') : '';
+        if(d){ imageCache[r.id]=d; try{localStorage.setItem(IMG_PREFIX+r.id,d);}catch(e){} rerenderCurrent(); }
+      }).catch(()=>{ _imgFetching[r.id]=false; });
+    }
+  });
+}
+// Move any old inline photos out of the main document into their own docs.
+function migrateImages(){
+  if(!db) return;
+  (data.recipes||[]).forEach(r=>{
+    if(typeof r.image==='string' && r.image.indexOf('data:')===0){
+      const id=r.id, dataUrl=r.image;
+      imageCache[id]=dataUrl; try{localStorage.setItem(IMG_PREFIX+id,dataUrl);}catch(e){}
+      db.collection('mealPlannerImages').doc(id).set({data:dataUrl, updatedAt:Date.now()})
+        .then(()=>{ const rr=data.recipes.find(x=>x.id===id); if(rr){ rr.image='cloud'; saveLocal(); pushRemote(); } })
+        .catch(e=>console.warn('Photo move pending (Firestore rules may need updating):', e));
+    }
+  });
+}
+// Save or clear a recipe's photo, keeping the big image data out of the main doc.
+function applyRecipeImage(id, dataUrl){
+  const r=data.recipes.find(x=>x.id===id); if(!r) return;
+  if(!dataUrl){
+    r.image='';
+    delete imageCache[id]; try{localStorage.removeItem(IMG_PREFIX+id);}catch(e){}
+    if(db) db.collection('mealPlannerImages').doc(id).delete().catch(()=>{});
+    return;
+  }
+  imageCache[id]=dataUrl; try{localStorage.setItem(IMG_PREFIX+id,dataUrl);}catch(e){}
+  if(db){
+    db.collection('mealPlannerImages').doc(id).set({data:dataUrl, updatedAt:Date.now()})
+      .then(()=>{ const rr=data.recipes.find(x=>x.id===id); if(rr){ rr.image='cloud'; saveLocal(); pushRemote(); } })
+      .catch(e=>{ console.warn('Photo cloud-save failed; keeping it on the recipe for now.', e); const rr=data.recipes.find(x=>x.id===id); if(rr){ rr.image=dataUrl; saveLocal(); pushRemote(); } });
+  }else{
+    r.image=dataUrl;   // offline / local-only fallback
+  }
 }
 // Resolve a plan slot to its recipe + effective servings (null slot.servings = use recipe base)
 function slotInfo(key){
@@ -555,13 +615,13 @@ function commitCategoryInput(){
   renderCategoryChips();
 }
 
-/* ---- Recipe photo (compressed and stored with the recipe) ---- */
-let currentImage='';
+/* ---- Recipe photo (compressed; saved to its own cloud doc on save) ---- */
+let currentImage='', imageChanged=false;
 function onRecipePhoto(ev){
   const file=ev.target.files&&ev.target.files[0]; if(!file) return;
   setStatus('<span class="spin"></span>Processing photo…','info');
   compressImage(file,700,0.55).then(dataUrl=>{
-    currentImage=dataUrl; renderPhotoPreview(); setStatus('','');
+    currentImage=dataUrl; imageChanged=true; renderPhotoPreview(); setStatus('','');
   }).catch(()=>{ setStatus('Couldn\'t read that image. Try another one.','err'); });
   ev.target.value='';
 }
@@ -586,7 +646,7 @@ function renderPhotoPreview(){
     ? `<img src="${currentImage}" alt="recipe photo"><button class="btn outline small rm" onclick="removePhoto()">Remove photo</button>`
     : '';
 }
-function removePhoto(){ currentImage=''; renderPhotoPreview(); }
+function removePhoto(){ currentImage=''; imageChanged=true; renderPhotoPreview(); }
 function setRating(n){ currentRating=(n===currentRating)?0:n; renderStars(); }
 function renderStars(){
   const host=document.getElementById('recipeStars');
@@ -611,7 +671,7 @@ function resetImport(){
   editingId=null;
   currentRating=0; importSourceUrl='';
   currentCategories=[]; renderCategoryChips();
-  currentImage=''; renderPhotoPreview();
+  currentImage=''; imageChanged=false; renderPhotoPreview();
   renderStars();
   document.getElementById('sourceRow').style.display='none';
 }
@@ -823,12 +883,13 @@ function saveRecipe(thenPlan){
   let savedId;
   if(editingId){
     const r=data.recipes.find(r=>r.id===editingId);
-    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;r.image=currentImage;}
+    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;}
     savedId=editingId;
   }else{
     savedId=uid();
-    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category,image:currentImage});
+    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category,image:''});
   }
+  if(imageChanged) applyRecipeImage(savedId, currentImage);
   save();
   closeModal('importModal');
   if(thenPlan){
@@ -856,7 +917,7 @@ function toggleFilterCat(cat){
 function recipeItemHtml(r){
   const cats=catsOf(r);
   return `<div class="recipe-item">
-      ${r.image?`<div class="emoji photo" style="background-image:url('${r.image}')"></div>`:`<div class="emoji">${emojiFor(r.name)}</div>`}
+      ${imgData(r)?`<div class="emoji photo" style="background-image:url('${imgData(r)}')"></div>`:`<div class="emoji">${emojiFor(r.name)}</div>`}
       <div class="meta" onclick="editRecipe('${r.id}')">
         <div class="name">${esc(r.name)}</div>
         ${r.rating?`<div class="stars-sm">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:''}
@@ -906,7 +967,7 @@ function editRecipe(id){
   resetImport();
   editingId=id;
   importSourceUrl=r.sourceUrl||'';
-  currentImage=r.image||'';
+  currentImage=imgData(r); imageChanged=false;
   setImportMode('manual');
   showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, catsOf(r));
   document.getElementById('importModal').classList.add('open');
@@ -917,6 +978,9 @@ function deleteRecipe(id){
   data.recipes=data.recipes.filter(r=>r.id!==id);
   // remove from any plan slots
   for(const k in data.plan){ if(data.plan[k] && data.plan[k].rid===id) delete data.plan[k]; }
+  // clean up the recipe's photo
+  delete imageCache[id]; try{localStorage.removeItem(IMG_PREFIX+id);}catch(e){}
+  if(db) db.collection('mealPlannerImages').doc(id).delete().catch(()=>{});
   save(); renderRecipes(); toast('Deleted');
 }
 
@@ -1013,7 +1077,7 @@ function renderPickList(){
     return;
   }
   list.innerHTML=recipes.map(r=>`<div class="pick-item" onclick="chooseRecipe('${r.id}')">
-    ${r.image?`<span class="pick-thumb" style="background-image:url('${r.image}')"></span>`:`<span>${emojiFor(r.name)}</span>`}
+    ${imgData(r)?`<span class="pick-thumb" style="background-image:url('${imgData(r)}')"></span>`:`<span>${emojiFor(r.name)}</span>`}
     <span style="flex:1">${esc(r.name)}${r.rating?` <span class="stars-sm" style="display:inline">${'★'.repeat(r.rating)}</span>`:''}</span>
   </div>`).join('');
 }
@@ -1112,7 +1176,8 @@ function recipeDetailHtml(r, key){
   const instrHtml=instr
     ? `<div class="instr">${esc(instr).replace(/\n/g,'<br>')}</div>`
     : `<p class="hint">No cooking instructions saved yet — tap “Edit recipe” to add them.</p>`;
-  const photo=r.image?`<img src="${r.image}" alt="${esc(r.name)}" style="width:100%;border-radius:12px;margin-bottom:14px;display:block">`:'';
+  const _im=imgData(r);
+  const photo=_im?`<img src="${_im}" alt="${esc(r.name)}" style="width:100%;border-radius:12px;margin-bottom:14px;display:block">`:'';
   let actions=`<button class="btn secondary" style="margin-top:18px" onclick="closeModal('viewModal');editRecipe('${r.id}')">✏️ Edit recipe</button>`;
   if(key){
     actions+=`<button class="btn outline small" style="margin-top:8px" onclick="closeModal('viewModal');pickRecipe('${key}')">🔄 Change recipe for this slot</button>`
@@ -1377,8 +1442,10 @@ function removePantryItem(idx){
 /* ---------------- Backup & restore ---------------- */
 function openBackup(){ document.getElementById('backupModal').classList.add('open'); }
 function exportBackup(){
+  // Embed each recipe's photo so the backup file is fully self-contained.
+  const recipes=(data.recipes||[]).map(r=>{ const im=imgData(r); return Object.assign({}, r, {image: im || ''}); });
   const obj={_app:'meal-planner', version:1, exportedAt:new Date().toISOString(),
-    recipes:data.recipes, plan:data.plan, groceryChecked:data.groceryChecked, pantry:data.pantry};
+    recipes, plan:data.plan, groceryChecked:data.groceryChecked, pantry:data.pantry};
   const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
@@ -1398,6 +1465,7 @@ function importBackup(ev){
     save();
     closeModal('backupModal');
     rerenderCurrent();
+    migrateImages();   // move any embedded photos into their own cloud docs
     toast('Backup restored ✓');
   };
   reader.readAsText(file); ev.target.value='';
@@ -1431,6 +1499,7 @@ if(DOC){
 }else if(!localStorage.getItem(STORE_KEY) && !data.recipes.length){
   seedExample(); renderPlanner();    // local-only fallback if cloud is unavailable
 }
+ensureImages(); migrateImages();     // load cloud photos; move any legacy inline photos out
 </script>
 </body>
 </html>
