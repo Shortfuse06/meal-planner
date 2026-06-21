@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16j (batch multiplier scales recipe view too) -->
+<!-- Meal Planner — version 2026-06-16k (backup & restore + weekly auto-backup) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -204,6 +204,7 @@
 </div>
 
 <header>
+  <button class="topbtn" onclick="openBackup()">⚙ Backup</button>
   <h1>🍲 Meal Planner</h1>
   <div class="sub" id="weekLabel">Plan your week, shop in one trip<span id="syncDot" title="Cloud sync"></span></div>
 </header>
@@ -376,6 +377,19 @@
   <div class="modal">
     <h2>Recipe <button class="x" onclick="closeModal('viewModal')">×</button></h2>
     <div id="viewBody"></div>
+  </div>
+</div>
+
+<!-- Backup / restore modal -->
+<div class="modal-bg" id="backupModal">
+  <div class="modal">
+    <h2>Backup &amp; Restore <button class="x" onclick="closeModal('backupModal')">×</button></h2>
+    <p class="hint">Save a copy of all your recipes, meal plan and pantry — or restore everything from a saved copy.</p>
+    <button class="btn" style="margin-top:14px" onclick="exportBackup()">⬇ Export a backup file</button>
+    <label class="btn outline" style="margin-top:10px;display:block;text-align:center;cursor:pointer">⬆ Restore from a backup
+      <input type="file" accept="application/json,.json" onchange="importBackup(event)" style="display:none">
+    </label>
+    <p class="hint" style="margin-top:14px">💾 A backup is also saved automatically to your computer once a week.</p>
   </div>
 </div>
 
@@ -1358,6 +1372,35 @@ function removePantryItem(idx){
   data.pantry.splice(idx,1);
   save(); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
+}
+
+/* ---------------- Backup & restore ---------------- */
+function openBackup(){ document.getElementById('backupModal').classList.add('open'); }
+function exportBackup(){
+  const obj={_app:'meal-planner', version:1, exportedAt:new Date().toISOString(),
+    recipes:data.recipes, plan:data.plan, groceryChecked:data.groceryChecked, pantry:data.pantry};
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='meal-planner-backup-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  toast('Backup downloaded');
+}
+function importBackup(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let obj; try{ obj=JSON.parse(reader.result); }catch(e){ toast('Couldn\'t read that file'); return; }
+    if(!obj || (!Array.isArray(obj.recipes) && !obj.plan)){ toast('That doesn\'t look like a backup'); return; }
+    if(!confirm('Restore this backup? It replaces the current recipes, meal plan and pantry for everyone.')) return;
+    data=normalize(obj);
+    save();
+    closeModal('backupModal');
+    rerenderCurrent();
+    toast('Backup restored ✓');
+  };
+  reader.readAsText(file); ev.target.value='';
 }
 
 /* ---------------- utils ---------------- */
