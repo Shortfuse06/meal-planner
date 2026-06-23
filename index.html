@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16l (photos stored in their own cloud docs) -->
+<!-- Meal Planner — version 2026-06-16m (prep / cook / total times) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -161,6 +161,7 @@
   .batch-row{display:flex; align-items:center; gap:10px; margin-top:16px; font-weight:600; font-size:14.5px}
   .batch-row .btn.outline.small{width:auto; min-width:44px; font-size:18px; line-height:1; padding:6px 0}
   .batch-row b{min-width:34px; text-align:center}
+  .times-line{font-size:13.5px; color:var(--muted); font-weight:600; margin-top:12px}
   /* Category tags in the editor */
   .cat-chips{display:flex; flex-wrap:wrap; gap:6px}
   .cat-chips:not(:empty){margin-bottom:8px}
@@ -332,6 +333,12 @@
       <label>Serves (base recipe)</label>
       <input type="text" id="recipeServings" inputmode="numeric" placeholder="4" style="max-width:120px">
       <p class="hint" style="margin-top:4px">Used to scale your grocery amounts (US cups, oz, lb, tsp/tbsp) when you cook for more or fewer people.</p>
+      <label>Times <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <div class="row">
+        <input type="text" id="recipePrep" placeholder="Prep · 15 min" autocapitalize="off">
+        <input type="text" id="recipeCook" placeholder="Cook · 30 min" autocapitalize="off">
+        <input type="text" id="recipeTotal" placeholder="Total · 45 min" autocapitalize="off">
+      </div>
       <label>Ingredients</label>
       <div id="ingredientLines"></div>
       <button class="btn outline small" style="margin-top:4px" onclick="addIngredientLine('')">+ Add ingredient</button>
@@ -430,7 +437,7 @@ function normalize(d){
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
   d.pantry = Array.isArray(d.pantry)?d.pantry:[];
-  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
+  d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.prepTime==null) r.prepTime=''; if(r.cookTime==null) r.cookTime=''; if(r.totalTime==null) r.totalTime=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
 }
@@ -664,6 +671,9 @@ function resetImport(){
   document.getElementById('recipeName').value='';
   document.getElementById('recipeCategory').value='';
   document.getElementById('recipeServings').value='';
+  document.getElementById('recipePrep').value='';
+  document.getElementById('recipeCook').value='';
+  document.getElementById('recipeTotal').value='';
   document.getElementById('recipeNotes').value='';
   document.getElementById('ingredientLines').innerHTML='';
   document.getElementById('editArea').style.display='none';
@@ -700,7 +710,7 @@ function addIngredientLine(val){
   div.innerHTML='<input type="text" value="'+(val||'').replace(/"/g,'&quot;')+'" placeholder="1 cup flour"><button onclick="this.parentNode.remove()">×</button>';
   wrap.appendChild(div);
 }
-function showEdit(name,ings,servings,notes,rating,category){
+function showEdit(name,ings,servings,notes,rating,category,times){
   document.getElementById('editArea').style.display='block';
   document.getElementById('recipeName').value=name||'';
   currentCategories = Array.isArray(category) ? category.slice() : (category?String(category).split(',').map(s=>s.trim()).filter(Boolean):[]);
@@ -708,6 +718,10 @@ function showEdit(name,ings,servings,notes,rating,category){
   renderCategoryChips();
   renderPhotoPreview();
   document.getElementById('recipeServings').value=servings||'';
+  times=times||{};
+  document.getElementById('recipePrep').value=times.prep||'';
+  document.getElementById('recipeCook').value=times.cook||'';
+  document.getElementById('recipeTotal').value=times.total||'';
   document.getElementById('recipeNotes').value=notes||'';
   currentRating=rating||0; renderStars();
   const sr=document.getElementById('sourceRow');
@@ -733,7 +747,7 @@ async function importLink(){
     }else{
       setStatus('Couldn\'t auto-detect ingredients on that page. Add them manually below.','info');
     }
-    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients, '', parsed.instructions||'', 0, parsed.categories||[]);
+    showEdit(parsed.title || titleFromUrl(url), parsed.ingredients, '', parsed.instructions||'', 0, parsed.categories||[], {prep:parsed.prepTime, cook:parsed.cookTime, total:parsed.totalTime});
   }catch(e){
     setStatus('That site blocked automatic import. You can type the recipe in below.','err');
     showEdit(titleFromUrl(url), []);
@@ -778,8 +792,22 @@ function extractInstructions(node){
   let n=0;
   return steps.map(s=> /^—.*—$/.test(s) ? '\n'+s : (++n)+'. '+s ).join('\n').trim();
 }
+// ISO 8601 duration (e.g. "PT1H30M") → minutes, and minutes → friendly text.
+function isoToMins(iso){
+  if(typeof iso!=='string') return 0;
+  const m=iso.match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:\d+S)?)?$/i);
+  if(!m) return 0;
+  return (+m[1]||0)*1440 + (+m[2]||0)*60 + (+m[3]||0);
+}
+function minsToText(min){
+  min=Math.round(min||0); if(min<=0) return '';
+  const h=Math.floor(min/60), mm=min%60, parts=[];
+  if(h) parts.push(h+' hr');
+  if(mm) parts.push(mm+' min');
+  return parts.join(' ');
+}
 function parseRecipe(html){
-  let title='', ingredients=[], instructions='', categories=[];
+  let title='', ingredients=[], instructions='', categories=[], prepTime='', cookTime='', totalTime='';
   // 1) JSON-LD structured data (most recipe sites)
   const scripts=[...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   for(const m of scripts){
@@ -796,6 +824,11 @@ function parseRecipe(html){
           if(instr) instructions=instr;
           const rc=[].concat(node.recipeCategory||[]).map(x=>decode(stripTags(String(x))).trim()).filter(Boolean);
           if(rc.length) categories=[...new Set(rc)];
+          const pM=isoToMins(node.prepTime), cM=isoToMins(node.cookTime);
+          let tM=isoToMins(node.totalTime); if(!tM && (pM||cM)) tM=pM+cM;
+          if(pM) prepTime=minsToText(pM);
+          if(cM) cookTime=minsToText(cM);
+          if(tM) totalTime=minsToText(tM);
         }
       }
     }catch(e){}
@@ -818,7 +851,7 @@ function parseRecipe(html){
   ingredients=ingredients.map(s=>decode(stripTags(String(s))).replace(/\s+/g,' ').trim()).filter(Boolean);
   // de-dupe
   ingredients=[...new Set(ingredients)];
-  return {title:decode(title), ingredients, instructions, categories};
+  return {title:decode(title), ingredients, instructions, categories, prepTime, cookTime, totalTime};
 }
 function stripTags(s){return String(s).replace(/<[^>]*>/g,' ');}
 function decode(s){const t=document.createElement('textarea');t.innerHTML=s;return t.value;}
@@ -875,6 +908,9 @@ function saveRecipe(thenPlan){
     .map(i=>i.value.trim()).filter(Boolean);
   const servings=Math.max(1,parseInt(document.getElementById('recipeServings').value)||4);
   const notes=document.getElementById('recipeNotes').value.trim();
+  const prepTime=document.getElementById('recipePrep').value.trim();
+  const cookTime=document.getElementById('recipeCook').value.trim();
+  const totalTime=document.getElementById('recipeTotal').value.trim();
   commitCategoryInput();                       // fold any text still in the box into the tags
   const categories=currentCategories.slice();
   const category=categories.join(', ');         // kept in sync for backward compatibility
@@ -883,11 +919,11 @@ function saveRecipe(thenPlan){
   let savedId;
   if(editingId){
     const r=data.recipes.find(r=>r.id===editingId);
-    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;}
+    if(r){r.name=name;r.ingredients=ings;r.servings=servings;r.notes=notes;r.rating=currentRating;r.sourceUrl=importSourceUrl||r.sourceUrl||'';r.categories=categories;r.category=category;r.prepTime=prepTime;r.cookTime=cookTime;r.totalTime=totalTime;}
     savedId=editingId;
   }else{
     savedId=uid();
-    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category,image:''});
+    data.recipes.push({id:savedId,name,ingredients:ings,servings,notes,rating:currentRating,sourceUrl:importSourceUrl||'',categories,category,image:'',prepTime,cookTime,totalTime});
   }
   if(imageChanged) applyRecipeImage(savedId, currentImage);
   save();
@@ -921,7 +957,7 @@ function recipeItemHtml(r){
       <div class="meta" onclick="editRecipe('${r.id}')">
         <div class="name">${esc(r.name)}</div>
         ${r.rating?`<div class="stars-sm">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:''}
-        <div class="count">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}${r.ingredients.length} ingredient${r.ingredients.length!==1?'s':''} · serves ${r.servings||4}${r.notes?' · 📝':''}${r.sourceUrl?' · 🔗':''} · tap to edit</div>
+        <div class="count">${cats.length?`🏷 ${esc(cats.join(', '))} · `:''}${r.ingredients.length} ingredient${r.ingredients.length!==1?'s':''} · serves ${r.servings||4}${r.totalTime?` · ⏱ ${esc(r.totalTime)}`:''}${r.notes?' · 📝':''}${r.sourceUrl?' · 🔗':''} · tap to edit</div>
       </div>
       <button class="btn danger small" onclick="deleteRecipe('${r.id}')">Delete</button>
     </div>`;
@@ -969,7 +1005,7 @@ function editRecipe(id){
   importSourceUrl=r.sourceUrl||'';
   currentImage=imgData(r); imageChanged=false;
   setImportMode('manual');
-  showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, catsOf(r));
+  showEdit(r.name, r.ingredients, r.servings, r.notes, r.rating, catsOf(r), {prep:r.prepTime, cook:r.cookTime, total:r.totalTime});
   document.getElementById('importModal').classList.add('open');
 }
 function deleteRecipe(id){
@@ -1169,6 +1205,11 @@ function scaleIngredient(line, factor){
 function recipeDetailHtml(r, key){
   const cats=catsOf(r);
   const slotTimes = key ? ((slotInfo(key)||{}).times||1) : 1;
+  const timeBits=[];
+  if(r.prepTime) timeBits.push('⏱ Prep '+esc(r.prepTime));
+  if(r.cookTime) timeBits.push('🔥 Cook '+esc(r.cookTime));
+  if(r.totalTime) timeBits.push('🍽 Total '+esc(r.totalTime));
+  const timesHtml = timeBits.length ? `<div class="times-line">${timeBits.join('  ·  ')}</div>` : '';
   const stars=r.rating?`<div class="stars-sm" style="font-size:15px;margin-top:3px">${'★'.repeat(r.rating)}<span class="off">${'★'.repeat(5-r.rating)}</span></div>`:'';
   const src=r.sourceUrl?`<p class="hint" style="margin-top:8px">🔗 <a class="src-link" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener">${esc(shortUrl(r.sourceUrl))}</a></p>`:'';
   const ings=(r.ingredients||[]).map(i=>`<li>${esc(scaleIngredient(i, slotTimes))}</li>`).join('');
@@ -1191,6 +1232,7 @@ function recipeDetailHtml(r, key){
         ${stars}
       </div>
     </div>${src}
+    ${timesHtml}
     ${key?`<div class="batch-row">Batches needed: <button class="btn outline small" onclick="bumpSlot('${key}',-1)">−</button><b id="batchVal">${slotTimes}×</b><button class="btn outline small" onclick="bumpSlot('${key}',1)">＋</button></div>`:''}
     <h3>Ingredients</h3>
     ${slotTimes>1?`<p class="hint" style="margin-top:0">Amounts scaled for ${slotTimes}× batches.</p>`:''}
