@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16q (Snacks & Nuts category) -->
+<!-- Meal Planner — version 2026-06-16r (confirm pantry removals) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1570,6 +1570,8 @@ function addPantryItem(){
 }
 function removePantryItem(idx){
   if(!data.pantry) return;
+  const p=data.pantry[idx]; if(!p) return;
+  if(!confirm('Remove “'+pantryName(p)+'” from your pantry?')) return;
   data.pantry.splice(idx,1);
   save(); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
@@ -1599,6 +1601,8 @@ function savePantryEdit(){
 }
 function deletePantryFromModal(){
   if(pantryEditIdx<0) return;
+  const p=data.pantry[pantryEditIdx];
+  if(!confirm('Remove “'+(p?pantryName(p):'this item')+'” from your pantry?')) return;
   data.pantry.splice(pantryEditIdx,1); pantryEditIdx=-1;
   save(); closeModal('pantryModal'); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
