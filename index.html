@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16n (pantry items: edit, amount, category) -->
+<!-- Meal Planner — version 2026-06-16o (pantry amounts subtract from grocery list) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -253,9 +253,11 @@
   <section class="view" id="view-pantry">
     <div class="card">
       <h2>🏠 At Home</h2>
-      <p class="hint">List ingredients you usually keep stocked. When you build your grocery list, anything on this list is skipped — so you only shop for what's missing. Tap an item to set an amount or category.</p>
-      <div class="row" style="margin-top:12px">
-        <input type="text" id="pantryInput" placeholder="e.g. olive oil" autocapitalize="off" list="pantryList" onkeydown="if(event.key==='Enter'){event.preventDefault();addPantryItem();}" style="flex:3">
+      <p class="hint">List ingredients you keep stocked, with how much you have. When you build your grocery list, your amounts are subtracted from what the recipes need — so you only buy the shortfall. (Items with no amount are skipped entirely.)</p>
+      <input type="text" id="pantryInput" placeholder="Item — e.g. rice" autocapitalize="off" list="pantryList" onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('pantryAddQty').focus();}" style="margin-top:12px">
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="pantryAddQty" inputmode="decimal" placeholder="Amount" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addPantryItem();}">
+        <select id="pantryAddUnit" style="flex:1"><option value="">each</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option><option value="floz">fl oz</option><option value="pint">pint</option><option value="quart">quart</option><option value="gallon">gallon</option><option value="ml">ml</option><option value="l">liter</option><option value="oz">oz</option><option value="lb">lb</option><option value="g">g</option><option value="kg">kg</option><option value="can">can</option><option value="clove">clove</option><option value="package">pkg</option><option value="bunch">bunch</option><option value="stick">stick</option><option value="jar">jar</option><option value="bottle">bottle</option><option value="bag">bag</option><option value="box">box</option></select>
         <button class="btn small" style="flex:1" onclick="addPantryItem()">Add</button>
       </div>
       <datalist id="pantryList">
@@ -406,8 +408,11 @@
     <h2>Edit pantry item <button class="x" onclick="closeModal('pantryModal')">×</button></h2>
     <label>Item</label>
     <input type="text" id="pantryName" autocapitalize="off">
-    <label>Amount <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-    <input type="text" id="pantryAmount" placeholder="e.g. 2 lbs, 1 bottle, half a bag" autocapitalize="off">
+    <label>Amount <span style="font-weight:400;color:var(--muted)">(optional — leave blank to just mark "I have this")</span></label>
+    <div class="row">
+      <input type="text" id="pantryEditQty" inputmode="decimal" placeholder="Amount" style="flex:1">
+      <select id="pantryEditUnit" style="flex:1"><option value="">each</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option><option value="floz">fl oz</option><option value="pint">pint</option><option value="quart">quart</option><option value="gallon">gallon</option><option value="ml">ml</option><option value="l">liter</option><option value="oz">oz</option><option value="lb">lb</option><option value="g">g</option><option value="kg">kg</option><option value="can">can</option><option value="clove">clove</option><option value="package">pkg</option><option value="bunch">bunch</option><option value="stick">stick</option><option value="jar">jar</option><option value="bottle">bottle</option><option value="bag">bag</option><option value="box">box</option></select>
+    </div>
     <label>Category</label>
     <input type="text" id="pantryCategory" list="pantryCatList" placeholder="Leave blank to auto-categorize" autocapitalize="words">
     <datalist id="pantryCatList"></datalist>
@@ -452,9 +457,13 @@ function normalize(d){
   d.recipes = d.recipes||[];
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
-  d.pantry = (Array.isArray(d.pantry)?d.pantry:[]).map(p=> (p && typeof p==='object')
-      ? {name:p.name||'', amount:p.amount||'', category:p.category||''}
-      : {name:String(p||''), amount:'', category:''}).filter(p=>p.name);
+  d.pantry = (Array.isArray(d.pantry)?d.pantry:[]).map(p=>{
+    if(!(p && typeof p==='object')) p={name:String(p||'')};
+    let qty = (p.qty!=null && p.qty!=='') ? String(p.qty) : '';
+    let unit = p.unit||'';
+    if(qty==='' && p.amount){ const pe=parsePantryAmount(p.amount); qty=pe.qty; unit=pe.unit; }   // migrate old free-text amount
+    return {name:p.name||'', qty, unit, category:p.category||''};
+  }).filter(p=>p.name);
   d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.prepTime==null) r.prepTime=''; if(r.cookTime==null) r.cookTime=''; if(r.totalTime==null) r.totalTime=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
@@ -1305,7 +1314,7 @@ const VOL={tsp:1,teaspoon:1,teaspoons:1,tbsp:3,tbsps:3,tablespoon:3,tablespoons:
 const WT={oz:1,ounce:1,ounces:1,lb:16,lbs:16,pound:16,pounds:16,
   g:0.035274,gram:0.035274,grams:0.035274,gramme:0.035274,grammes:0.035274,
   kg:35.274,kilo:35.274,kilos:35.274,kilogram:35.274,kilograms:35.274};
-const COUNT={clove:'clove',cloves:'clove',can:'can',cans:'can',pinch:'pinch',pinches:'pinch',slice:'slice',slices:'slice',package:'pkg',packages:'pkg',pkg:'pkg',pkgs:'pkg',bunch:'bunch',bunches:'bunch',stick:'stick',sticks:'stick',head:'head',heads:'head',sprig:'sprig',sprigs:'sprig'};
+const COUNT={clove:'clove',cloves:'clove',can:'can',cans:'can',pinch:'pinch',pinches:'pinch',slice:'slice',slices:'slice',package:'pkg',packages:'pkg',pkg:'pkg',pkgs:'pkg',bunch:'bunch',bunches:'bunch',stick:'stick',sticks:'stick',head:'head',heads:'head',sprig:'sprig',sprigs:'sprig',jar:'jar',jars:'jar',bottle:'bottle',bottles:'bottle',bag:'bag',bags:'bag',box:'box',boxes:'box'};
 function parseQty(str){
   str=String(str).trim(); let m;
   m=str.match(/^(\d+)?\s*([¼½¾⅓⅔⅛⅜⅝⅞⅙⅚⅕⅖⅗⅘])\s*(.*)$/);          // 1½ or ½
@@ -1386,20 +1395,46 @@ function buildGrocery(){
       else g.buckets[b].hasNull=true;
     });
   }));
-  const built=Object.entries(groups).map(([k,g])=>{
+  // ----- Subtract what you already have at home (the pantry) -----
+  // Items with no amount are skipped entirely; items with an amount are subtracted
+  // from the recipe need when the units are the same kind (volume/weight/count).
+  const pantryNoQty=new Set();   // normKey -> "I have this" (unquantified)
+  const pantryBk={};             // normKey -> { bucket: canonicalAmount }
+  (data.pantry||[]).forEach(p=>{
+    const name=pantryName(p); if(!name) return;
+    const nk=normalizeKey(name)||name.toLowerCase();
+    const qn=parseFloat(p && p.qty);
+    if(!(qn>0)){ pantryNoQty.add(nk); return; }
+    const pi=parseIng((qn+' '+((p&&p.unit)||'')+' '+name).trim());
+    if(pi.qty!=null){ (pantryBk[nk]=pantryBk[nk]||{}); const b=pi.bucket||''; pantryBk[nk][b]=(pantryBk[nk][b]||0)+pi.qty; }
+    else pantryNoQty.add(nk);
+  });
+
+  const built=[], skipped=[];
+  Object.entries(groups).forEach(([k,g])=>{
+    if(pantryNoQty.has(k)){ skipped.push(capFirst(g.name)); return; }   // you have it → drop entirely
+    if(pantryBk[k]){
+      for(const [b,info] of Object.entries(g.buckets)){
+        const have=pantryBk[k][b];
+        if(have && info.hasQty){
+          info.sum -= have;
+          if(info.sum <= 1e-6){ info.sum=0; info.hasQty=false; }
+        }
+      }
+    }
     const parts=[];
     for(const [b,info] of Object.entries(g.buckets)){
-      if(info.hasQty) parts.push(fmtBucket(info.type, b, info.sum));
+      if(info.hasQty && info.sum>1e-6) parts.push(fmtBucket(info.type, b, info.sum));
     }
+    const anyNull=Object.values(g.buckets).some(info=>info.hasNull);
+    if(!parts.length && !anyNull){ skipped.push(capFirst(g.name)); return; }   // fully covered by your amounts
     const qtyStr=parts.join(' + ');
     const name=capFirst(g.name);
     const display=(qtyStr?qtyStr+' ':'')+name;
-    return {key:k, display, name, froms:[...g.froms], cat:g.cat};
+    built.push({key:k, display, name, froms:[...g.froms], cat:g.cat});
   });
-  // Skip anything already stocked at home (the pantry).
-  const pantrySet=new Set((data.pantry||[]).map(p=>{ const n=pantryName(p); return normalizeKey(n)||n.toLowerCase(); }));
-  data._grocery=built.filter(it=>!pantrySet.has(it.key));
-  data._grocerySkipped=built.filter(it=>pantrySet.has(it.key)).map(it=>it.name);
+  data._grocery=built;
+  data._grocerySkipped=skipped;
   save();
   renderGrocery();
 }
@@ -1475,7 +1510,7 @@ function renderPantry(){
     const inCat=groups[cat]; if(!inCat||!inCat.length) return;
     html+=`<div class="card grocery-cat"><h3>${esc(cat)}</h3>`;
     inCat.forEach(({p,idx})=>{
-      const nm=pantryName(p), amt=(p&&p.amount||'').trim();
+      const nm=pantryName(p), amt=pantryAmountText(p);
       html+=`<div class="gitem">
         <div class="txt" onclick="openPantryEdit(${idx})" style="cursor:pointer">${esc(nm)}${amt?` <span class="from">${esc(amt)}</span>`:''}</div>
         <button class="btn danger small" onclick="removePantryItem(${idx})">Remove</button>
@@ -1488,14 +1523,38 @@ function renderPantry(){
 }
 function pantryName(p){ return (p && typeof p==='object') ? (p.name||'') : (p||''); }
 function pantryCatOf(p){ const c=(p && p.category||'').trim(); return c || categorize(pantryName(p)); }
+const UNIT_LABELS={'':'',tsp:'tsp',tbsp:'tbsp',cup:'cup',floz:'fl oz',pint:'pint',quart:'quart',gallon:'gallon',ml:'ml',l:'liter',oz:'oz',lb:'lb',g:'g',kg:'kg',can:'can',clove:'clove',package:'pkg',bunch:'bunch',stick:'stick',jar:'jar',bottle:'bottle',bag:'bag',box:'box'};
+function unitLabelOf(u){ return UNIT_LABELS[u]!=null ? UNIT_LABELS[u] : (u||''); }
+// Friendly "2 lbs" style text for a pantry item (falls back to legacy free-text amount).
+function pantryAmountText(p){
+  const q=(p && p.qty!=null && p.qty!=='') ? String(p.qty).trim() : '';
+  if(!q) return (p && p.amount||'').trim();
+  const u=unitLabelOf((p && p.unit||'').trim());
+  return u ? (q+' '+u) : q;
+}
+// Best-effort parse of legacy free-text amount ("2 lbs") into qty + unit, for migration.
+function parsePantryAmount(text){
+  text=String(text||'').trim(); if(!text) return {qty:'',unit:''};
+  const {qty,rest}=parseQty(text);
+  if(qty==null) return {qty:'',unit:''};
+  const w=((rest||'').trim().split(/\s+/)[0]||'').toLowerCase().replace(/s$/,'');
+  const known=['tsp','tbsp','cup','floz','pint','quart','gallon','ml','l','oz','lb','g','kg','can','clove','package','pkg','bunch','stick','jar','bottle','bag','box'];
+  return {qty:String(qty), unit: known.includes(w)?(w==='pkg'?'package':w):''};
+}
 function addPantryItem(){
   const inp=document.getElementById('pantryInput');
-  const v=(inp.value||'').trim(); if(!v) return;
+  const name=(inp.value||'').trim(); if(!name) return;
+  const qtyEl=document.getElementById('pantryAddQty'), unitEl=document.getElementById('pantryAddUnit');
+  const qty=(qtyEl.value||'').trim(), unit=(unitEl.value||'');
   data.pantry=data.pantry||[];
-  v.split(',').map(s=>s.trim()).filter(Boolean).forEach(name=>{
-    if(!data.pantry.some(x=>pantryName(x).toLowerCase()===name.toLowerCase())) data.pantry.push({name, amount:'', category:''});
-  });
-  inp.value='';
+  const upsert=(nm)=>{
+    const ex=data.pantry.find(x=>pantryName(x).toLowerCase()===nm.toLowerCase());
+    if(ex){ ex.qty=qty; if(qty) ex.unit=unit; }
+    else data.pantry.push({name:nm, qty, unit:(qty?unit:''), category:''});
+  };
+  if(qty){ upsert(name); }                                   // a quantity applies to one named item
+  else { name.split(',').map(s=>s.trim()).filter(Boolean).forEach(upsert); }  // quick multi-add by name
+  inp.value=''; qtyEl.value=''; unitEl.value='';
   save(); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery(); // keep grocery list in sync
 }
@@ -1509,9 +1568,10 @@ function removePantryItem(idx){
 let pantryEditIdx=-1;
 function openPantryEdit(idx){
   pantryEditIdx=idx;
-  const p=(data.pantry||[])[idx]||{name:'',amount:'',category:''};
+  const p=(data.pantry||[])[idx]||{name:'',qty:'',unit:'',category:''};
   document.getElementById('pantryName').value=pantryName(p);
-  document.getElementById('pantryAmount').value=p.amount||'';
+  document.getElementById('pantryEditQty').value=(p.qty!=null?p.qty:'')+'';
+  document.getElementById('pantryEditUnit').value=p.unit||'';
   document.getElementById('pantryCategory').value=p.category||'';
   document.getElementById('pantryCatList').innerHTML=CAT_ORDER.map(c=>`<option>${esc(c)}</option>`).join('');
   document.getElementById('pantryModal').classList.add('open');
@@ -1520,9 +1580,10 @@ function savePantryEdit(){
   if(pantryEditIdx<0) return;
   const name=document.getElementById('pantryName').value.trim();
   if(!name){ toast('Give the item a name'); return; }
-  const amount=document.getElementById('pantryAmount').value.trim();
+  const qty=document.getElementById('pantryEditQty').value.trim();
+  const unit=qty ? document.getElementById('pantryEditUnit').value : '';
   const category=document.getElementById('pantryCategory').value.trim();
-  data.pantry[pantryEditIdx]={name, amount, category};
+  data.pantry[pantryEditIdx]={name, qty, unit, category};
   save(); closeModal('pantryModal'); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
 }
