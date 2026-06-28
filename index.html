@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16o (pantry amounts subtract from grocery list) -->
+<!-- Meal Planner — version 2026-06-16p (pluralize pantry unit labels) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1525,11 +1525,20 @@ function pantryName(p){ return (p && typeof p==='object') ? (p.name||'') : (p||'
 function pantryCatOf(p){ const c=(p && p.category||'').trim(); return c || categorize(pantryName(p)); }
 const UNIT_LABELS={'':'',tsp:'tsp',tbsp:'tbsp',cup:'cup',floz:'fl oz',pint:'pint',quart:'quart',gallon:'gallon',ml:'ml',l:'liter',oz:'oz',lb:'lb',g:'g',kg:'kg',can:'can',clove:'clove',package:'pkg',bunch:'bunch',stick:'stick',jar:'jar',bottle:'bottle',bag:'bag',box:'box'};
 function unitLabelOf(u){ return UNIT_LABELS[u]!=null ? UNIT_LABELS[u] : (u||''); }
+// Pluralize a unit label for the given quantity (abbreviations stay the same).
+function pantryUnitLabel(unit, qty){
+  const base=unitLabelOf(unit); if(!base) return '';
+  if(Math.abs(parseFloat(qty))===1) return base;
+  if(['tsp','tbsp','oz','lb','g','kg','ml','fl oz'].includes(base)) return base;
+  if(base==='box') return 'boxes';
+  if(base==='bunch') return 'bunches';
+  return base+'s';
+}
 // Friendly "2 lbs" style text for a pantry item (falls back to legacy free-text amount).
 function pantryAmountText(p){
   const q=(p && p.qty!=null && p.qty!=='') ? String(p.qty).trim() : '';
   if(!q) return (p && p.amount||'').trim();
-  const u=unitLabelOf((p && p.unit||'').trim());
+  const u=pantryUnitLabel((p && p.unit||'').trim(), q);
   return u ? (q+' '+u) : q;
 }
 // Best-effort parse of legacy free-text amount ("2 lbs") into qty + unit, for migration.
