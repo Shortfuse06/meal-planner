@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16m (prep / cook / total times) -->
+<!-- Meal Planner — version 2026-06-16n (pantry items: edit, amount, category) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -253,7 +253,7 @@
   <section class="view" id="view-pantry">
     <div class="card">
       <h2>🏠 At Home</h2>
-      <p class="hint">List ingredients you usually keep stocked. When you build your grocery list, anything on this list is skipped — so you only shop for what's missing.</p>
+      <p class="hint">List ingredients you usually keep stocked. When you build your grocery list, anything on this list is skipped — so you only shop for what's missing. Tap an item to set an amount or category.</p>
       <div class="row" style="margin-top:12px">
         <input type="text" id="pantryInput" placeholder="e.g. olive oil" autocapitalize="off" list="pantryList" onkeydown="if(event.key==='Enter'){event.preventDefault();addPantryItem();}" style="flex:3">
         <button class="btn small" style="flex:1" onclick="addPantryItem()">Add</button>
@@ -400,6 +400,22 @@
   </div>
 </div>
 
+<!-- Pantry item edit modal -->
+<div class="modal-bg" id="pantryModal">
+  <div class="modal">
+    <h2>Edit pantry item <button class="x" onclick="closeModal('pantryModal')">×</button></h2>
+    <label>Item</label>
+    <input type="text" id="pantryName" autocapitalize="off">
+    <label>Amount <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+    <input type="text" id="pantryAmount" placeholder="e.g. 2 lbs, 1 bottle, half a bag" autocapitalize="off">
+    <label>Category</label>
+    <input type="text" id="pantryCategory" list="pantryCatList" placeholder="Leave blank to auto-categorize" autocapitalize="words">
+    <datalist id="pantryCatList"></datalist>
+    <button class="btn" style="margin-top:16px" onclick="savePantryEdit()">Save</button>
+    <button class="btn danger" style="margin-top:8px" onclick="deletePantryFromModal()">Remove item</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -436,7 +452,9 @@ function normalize(d){
   d.recipes = d.recipes||[];
   d.plan = d.plan||{};
   d.groceryChecked = d.groceryChecked||{};
-  d.pantry = Array.isArray(d.pantry)?d.pantry:[];
+  d.pantry = (Array.isArray(d.pantry)?d.pantry:[]).map(p=> (p && typeof p==='object')
+      ? {name:p.name||'', amount:p.amount||'', category:p.category||''}
+      : {name:String(p||''), amount:'', category:''}).filter(p=>p.name);
   d.recipes.forEach(r=>{ if(r.servings==null) r.servings=4; if(r.notes==null) r.notes=''; if(r.rating==null) r.rating=0; if(r.sourceUrl==null) r.sourceUrl=''; if(r.image==null) r.image=''; if(r.prepTime==null) r.prepTime=''; if(r.cookTime==null) r.cookTime=''; if(r.totalTime==null) r.totalTime=''; if(r.category==null) r.category=''; if(!Array.isArray(r.categories)) r.categories = r.category ? String(r.category).split(',').map(s=>s.trim()).filter(Boolean) : []; });
   for(const k in d.plan){ if(typeof d.plan[k]==='string') d.plan[k]={rid:d.plan[k], servings:null}; }
   return d;
@@ -1379,7 +1397,7 @@ function buildGrocery(){
     return {key:k, display, name, froms:[...g.froms], cat:g.cat};
   });
   // Skip anything already stocked at home (the pantry).
-  const pantrySet=new Set((data.pantry||[]).map(p=>normalizeKey(p)||p.toLowerCase()));
+  const pantrySet=new Set((data.pantry||[]).map(p=>{ const n=pantryName(p); return normalizeKey(n)||n.toLowerCase(); }));
   data._grocery=built.filter(it=>!pantrySet.has(it.key));
   data._grocerySkipped=built.filter(it=>pantrySet.has(it.key)).map(it=>it.name);
   save();
@@ -1448,27 +1466,34 @@ function renderPantry(){
     host.innerHTML='<div class="empty-state"><div class="big">🏠</div>Nothing here yet.<br>Add staples you always have on hand, like oil, salt, or rice.</div>';
     return;
   }
-  // Group by the same grocery categories for tidiness; keep each item's real index.
+  // Group by chosen category (or auto category); keep each item's real index.
   const groups={};
-  items.forEach((name,idx)=>{ const c=categorize(name); (groups[c]=groups[c]||[]).push({name,idx}); });
+  items.forEach((p,idx)=>{ const c=pantryCatOf(p); (groups[c]=groups[c]||[]).push({p,idx}); });
+  const order=[...CAT_ORDER.filter(c=>groups[c]), ...Object.keys(groups).filter(c=>!CAT_ORDER.includes(c)).sort()];
   let html='';
-  CAT_ORDER.forEach(cat=>{
+  order.forEach(cat=>{
     const inCat=groups[cat]; if(!inCat||!inCat.length) return;
-    html+=`<div class="card grocery-cat"><h3>${cat}</h3>`;
-    inCat.forEach(it=>{
-      html+=`<div class="gitem"><div class="txt">${esc(it.name)}</div><button class="btn danger small" onclick="removePantryItem(${it.idx})">Remove</button></div>`;
+    html+=`<div class="card grocery-cat"><h3>${esc(cat)}</h3>`;
+    inCat.forEach(({p,idx})=>{
+      const nm=pantryName(p), amt=(p&&p.amount||'').trim();
+      html+=`<div class="gitem">
+        <div class="txt" onclick="openPantryEdit(${idx})" style="cursor:pointer">${esc(nm)}${amt?` <span class="from">${esc(amt)}</span>`:''}</div>
+        <button class="btn danger small" onclick="removePantryItem(${idx})">Remove</button>
+      </div>`;
     });
     html+='</div>';
   });
   const bar=`<div class="card" style="text-align:center"><strong>${items.length}</strong> item${items.length!==1?'s':''} stocked at home</div>`;
   host.innerHTML=bar+html;
 }
+function pantryName(p){ return (p && typeof p==='object') ? (p.name||'') : (p||''); }
+function pantryCatOf(p){ const c=(p && p.category||'').trim(); return c || categorize(pantryName(p)); }
 function addPantryItem(){
   const inp=document.getElementById('pantryInput');
   const v=(inp.value||'').trim(); if(!v) return;
   data.pantry=data.pantry||[];
   v.split(',').map(s=>s.trim()).filter(Boolean).forEach(name=>{
-    if(!data.pantry.some(x=>x.toLowerCase()===name.toLowerCase())) data.pantry.push(name);
+    if(!data.pantry.some(x=>pantryName(x).toLowerCase()===name.toLowerCase())) data.pantry.push({name, amount:'', category:''});
   });
   inp.value='';
   save(); renderPantry();
@@ -1478,6 +1503,33 @@ function removePantryItem(idx){
   if(!data.pantry) return;
   data.pantry.splice(idx,1);
   save(); renderPantry();
+  if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
+}
+/* Edit a pantry item's name, amount and category */
+let pantryEditIdx=-1;
+function openPantryEdit(idx){
+  pantryEditIdx=idx;
+  const p=(data.pantry||[])[idx]||{name:'',amount:'',category:''};
+  document.getElementById('pantryName').value=pantryName(p);
+  document.getElementById('pantryAmount').value=p.amount||'';
+  document.getElementById('pantryCategory').value=p.category||'';
+  document.getElementById('pantryCatList').innerHTML=CAT_ORDER.map(c=>`<option>${esc(c)}</option>`).join('');
+  document.getElementById('pantryModal').classList.add('open');
+}
+function savePantryEdit(){
+  if(pantryEditIdx<0) return;
+  const name=document.getElementById('pantryName').value.trim();
+  if(!name){ toast('Give the item a name'); return; }
+  const amount=document.getElementById('pantryAmount').value.trim();
+  const category=document.getElementById('pantryCategory').value.trim();
+  data.pantry[pantryEditIdx]={name, amount, category};
+  save(); closeModal('pantryModal'); renderPantry();
+  if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
+}
+function deletePantryFromModal(){
+  if(pantryEditIdx<0) return;
+  data.pantry.splice(pantryEditIdx,1); pantryEditIdx=-1;
+  save(); closeModal('pantryModal'); renderPantry();
   if((data._grocery||[]).length || (data._grocerySkipped||[]).length) buildGrocery();
 }
 
