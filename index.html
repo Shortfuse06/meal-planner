@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Meal Planner — version 2026-06-16r (confirm pantry removals) -->
+<!-- Meal Planner — version 2026-06-16s (custom meals, no recipe) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -359,6 +359,7 @@
     <!-- Step 1: search + pick a recipe -->
     <div id="pickStep1">
       <input type="text" id="pickSearch" placeholder="🔍 Search recipes or ingredients…" autocapitalize="off" oninput="renderPickList()" style="margin-bottom:10px">
+      <button class="btn outline small" style="width:100%;margin-bottom:10px" onclick="addCustomMeal()">✏️ Add a custom meal (no recipe)</button>
       <div id="pickList"></div>
     </div>
     <!-- Step 2: choose meal + which days to apply to -->
@@ -586,6 +587,7 @@ function applyRecipeImage(id, dataUrl){
 // Resolve a plan slot to its recipe + effective servings (null slot.servings = use recipe base)
 function slotInfo(key){
   const s=data.plan[key]; if(!s) return null;
+  if(s.custom) return {custom:s.custom};       // a one-off meal with no recipe
   const r=data.recipes.find(x=>x.id===s.rid); if(!r) return null;
   // "times" = how many batches of the recipe. Old slots stored absolute servings.
   let times = s.times!=null ? s.times : (s.servings && r.servings ? Math.max(1,Math.round(s.servings/r.servings)) : 1);
@@ -1087,13 +1089,19 @@ function renderPlanner(){
     MEALS.forEach(meal=>{
       const key=day+'|'+meal;
       const info=slotInfo(key);
-      const r=info&&info.recipe;
-      if(r)assigned++;
-      const servNote=(r && info.times>1) ? `<span style="color:var(--muted);font-weight:400;font-size:12px"> · ${info.times}×</span>` : '';
+      const filled=!!info;
+      if(filled)assigned++;
+      let label, tap;
+      if(info && info.recipe){
+        const servNote=(info.times>1) ? `<span style="color:var(--muted);font-weight:400;font-size:12px"> · ${info.times}×</span>` : '';
+        label=esc(info.recipe.name)+servNote; tap=`viewSlot('${key}')`;
+      } else if(info && info.custom){
+        label=esc(info.custom)+`<span style="color:var(--muted);font-weight:400;font-size:12px"> · custom</span>`; tap=`viewSlot('${key}')`;
+      } else { label='tap to add'; tap=`pickRecipe('${key}')`; }
       html+=`<div class="slot">
         <span class="meal-label">${meal}</span>
-        <span class="assigned ${r?'':'empty'}" onclick="${r?`viewSlot('${key}')`:`pickRecipe('${key}')`}">${r?esc(r.name)+servNote:'tap to add'}</span>
-        ${r?`<button class="clear" onclick="clearSlot('${key}')">remove</button>`:`<button onclick="pickRecipe('${key}')">+ add</button>`}
+        <span class="assigned ${filled?'':'empty'}" onclick="${tap}">${label}</span>
+        ${filled?`<button class="clear" onclick="clearSlot('${key}')">remove</button>`:`<button onclick="pickRecipe('${key}')">+ add</button>`}
       </div>`;
     });
     html+='</div>';
@@ -1175,10 +1183,10 @@ function renderDayChecks(){
   document.getElementById('pickMealLabel').textContent=pickMeal.toLowerCase();
   document.getElementById('dayChecks').innerHTML=DAYS.map(d=>{
     const occ=slotInfo(d+'|'+pickMeal);
-    const occName=occ&&occ.recipe;
+    const occLabel=occ ? (occ.recipe?occ.recipe.name:occ.custom) : '';
     return `<label style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line);font-weight:500;margin:0">
       <input type="checkbox" value="${d}" ${d===pickDay?'checked':''} style="width:22px;height:22px;accent-color:var(--green)">
-      <span style="flex:1">${d}${occName?` <span style="color:var(--muted);font-size:12px">(now: ${esc(occName.name)})</span>`:''}</span>
+      <span style="flex:1">${d}${occLabel?` <span style="color:var(--muted);font-size:12px">(now: ${esc(occLabel)})</span>`:''}</span>
     </label>`;
   }).join('');
 }
@@ -1204,7 +1212,26 @@ function clearWeek(){
 function viewSlot(key){
   const info=slotInfo(key);
   if(!info){ pickRecipe(key); return; }   // empty slot → go straight to picking
+  if(info.custom){ editCustomSlot(key); return; }
   openRecipeView(info.recipe.id, key);
+}
+// Add a free-text meal (no recipe) to the tapped slot.
+function addCustomMeal(){
+  if(!pickKey){ toast('Tap a meal slot first'); return; }
+  const pre=(document.getElementById('pickSearch').value||'').trim();
+  const name=(prompt('Custom meal (e.g. Pork tenderloin roast with potatoes and carrots):', pre)||'').trim();
+  if(!name) return;
+  data.plan[pickKey]={custom:name};
+  save(); closeModal('pickModal'); show('plan');
+  toast('Custom meal added');
+}
+// Rename (or clear) a custom meal by tapping it.
+function editCustomSlot(key){
+  const s=data.plan[key]; if(!s||!s.custom) return;
+  const name=(prompt('Edit this custom meal (clear the text to remove it):', s.custom)||'').trim();
+  if(name===s.custom) return;
+  if(!name) delete data.plan[key]; else data.plan[key]={custom:name};
+  save(); renderPlanner();
 }
 // Change how many batches are planned for a slot, straight from the recipe view.
 function bumpSlot(key, delta){
@@ -1381,7 +1408,7 @@ function capFirst(s){ return s? s.charAt(0).toUpperCase()+s.slice(1) : s; }
 function buildGrocery(){
   const groups={}; // normKey -> {cat, froms:Set, name, units:{unit:{sum,hasQty,hasNull}}}
   DAYS.forEach(day=>MEALS.forEach(meal=>{
-    const info=slotInfo(day+'|'+meal); if(!info)return;
+    const info=slotInfo(day+'|'+meal); if(!info || !info.recipe)return;   // custom meals have no ingredients
     const r=info.recipe;
     const factor=info.times||1;   // scale ingredients by how many batches are planned
     r.ingredients.forEach(ing=>{
